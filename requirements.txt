@@ -1,0 +1,7 @@
+requests
+transformers
+torch
+pillow
+qwen-vl-utils
+accelerate
+psycopg2-binary
