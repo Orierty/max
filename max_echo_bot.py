@@ -3,10 +3,38 @@ import time
 import sys
 import os
 import json
+import logging
 from datetime import datetime
+from dotenv import load_dotenv
+from PIL import Image
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from qwen_vl_utils import process_vision_info
+import torch
 
+# Загружаем переменные окружения из .env файла
+load_dotenv()
 
-MAX_TOKEN = "f9LHodD0cOLlinzAz04btRFhnP3C8M0E3pndlaixzJo2Jgaivnoz5pSguc3ZHT8MAmiY_Mg4bTQ9yJZCz8XC"
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Получаем токен из переменных окружения
+MAX_TOKEN = os.getenv("MAX_TOKEN")
+if not MAX_TOKEN:
+    logger.error("MAX_TOKEN не найден в переменных окружения!")
+    logger.error("Создайте файл .env и добавьте туда MAX_TOKEN=ваш_токен")
+    sys.exit(1)
+
+# Параметр включения/выключения нейронки
+VISION_MODEL_ENABLED = os.getenv("VISION_MODEL_ENABLED", "false").lower() == "true"
+logger.info(f"Vision Model: {'ENABLED' if VISION_MODEL_ENABLED else 'DISABLED (using stubs)'}")
 
 BASE_URL = "https://platform-api.max.ru"
 
@@ -15,6 +43,166 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+# Глобальные переменные для модели Qwen2-VL
+vision_model = None
+vision_processor = None
+
+def init_vision_model():
+    """Инициализирует модель Qwen2-VL для распознавания изображений"""
+    global vision_model, vision_processor
+
+    try:
+        # Путь к папке с моделями в рабочей директории
+        models_dir = os.path.join(os.path.dirname(__file__), "models")
+        os.makedirs(models_dir, exist_ok=True)
+
+
+        # Если auto-gptq не установлен, используем обычную модель
+        model_name = "Qwen/Qwen2-VL-2B-Instruct"
+        local_model_path = os.path.join(models_dir, "Qwen2-VL-2B-Instruct")
+        logger.info("auto-gptq не установлен, используем стандартную модель Qwen2-VL-2B-Instruct...")
+        logger.warning("Для экономии памяти рекомендуется установить: pip install auto-gptq")
+
+        # Проверяем, есть ли уже локальная модель
+        if os.path.exists(local_model_path) and os.path.isdir(local_model_path):
+            logger.info(f"Используем локальную модель из {local_model_path}")
+            model_source = local_model_path
+        else:
+            logger.info(f"Модель будет скачана из HuggingFace и сохранена в {local_model_path}")
+            model_source = model_name
+
+        # Загружаем процессор
+        vision_processor = AutoProcessor.from_pretrained(
+            model_source,
+            trust_remote_code=True,
+            cache_dir=models_dir if model_source == model_name else None
+        )
+
+        # Загружаем модель
+        # Используем float16 если доступна GPU, иначе float32 для CPU
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+        vision_model = Qwen2VLForConditionalGeneration.from_pretrained(
+            model_source,
+            torch_dtype=dtype,
+            device_map="auto",
+            trust_remote_code=True,
+            cache_dir=models_dir if model_source == model_name else None
+        )
+
+        # Сохраняем модель локально, если она была скачана из HuggingFace
+        if model_source == model_name:
+            logger.info(f"Сохраняем модель локально в {local_model_path}...")
+            vision_model.save_pretrained(local_model_path)
+            vision_processor.save_pretrained(local_model_path)
+            logger.info("Модель успешно сохранена локально")
+
+        device = next(vision_model.parameters()).device
+        logger.info(f"Модель Qwen2-VL успешно загружена на устройство: {device}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке модели Qwen2-VL: {e}", exc_info=True)
+        return False
+
+def describe_image(image_path):
+    """Описывает изображение на русском языке с помощью Qwen2-VL"""
+    global vision_model, vision_processor
+
+    # Если нейронка выключена, возвращаем заглушку
+    if not VISION_MODEL_ENABLED:
+        logger.info("Vision Model отключена")
+        return ("Режим заглушки)\n\n"
+                "На изображении видно: [здесь было бы описание от нейронки]\n\n"
+                "Для включения нейронки установите VISION_MODEL_ENABLED=true в файле .env")
+
+    # Если модель ещё не загружена, загружаем её
+    if vision_model is None or vision_processor is None:
+        logger.info("Модель не загружена, инициализируем...")
+        if not init_vision_model():
+            return "Ошибка: не удалось загрузить модель для распознавания изображений."
+
+    try:
+        # Открываем изображение
+        image = Image.open(image_path).convert('RGB')
+
+        # Формируем запрос на русском языке
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "image": image_path,
+                    },
+                    {
+                        "type": "text",
+                        "text": "Опиши подробно что изображено на этой фотографии на русском языке. Будь максимально детальным и точным в описании."
+                    },
+                ],
+            }
+        ]
+
+        # Подготавливаем текст для модели
+        text = vision_processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
+        # Обрабатываем изображения
+        image_inputs, video_inputs = process_vision_info(messages)
+
+        # Подготавливаем входные данные
+        inputs = vision_processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        )
+        inputs = inputs.to(vision_model.device)
+
+        # Генерируем описание
+        logger.info("Генерация описания изображения...")
+        with torch.no_grad():
+            generated_ids = vision_model.generate(
+                **inputs,
+                max_new_tokens=512,
+                temperature=0.7,
+                do_sample=True
+            )
+
+        # Обрезаем входную часть и декодируем
+        generated_ids_trimmed = [
+            out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+        ]
+        output_text = vision_processor.batch_decode(
+            generated_ids_trimmed,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False
+        )[0]
+
+        logger.info(f"Описание сгенерировано: {output_text[:100]}...")
+        return output_text
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке изображения: {e}", exc_info=True)
+        return f"Ошибка при обработке изображения: {str(e)}"
+
+def download_image(url, save_path):
+    """Скачивает изображение по URL"""
+    try:
+        response = requests.get(url, timeout=30)
+        if response.status_code == 200:
+            with open(save_path, 'wb') as f:
+                f.write(response.content)
+            logger.info(f"Изображение скачано: {save_path}")
+            return True
+        else:
+            logger.error(f"Ошибка скачивания изображения: {response.status_code}")
+            return False
+    except Exception as e:
+        logger.error(f"Ошибка при скачивании изображения: {e}")
+        return False
 
 def load_db():
     """Загружает базу данных из JSON файла"""
@@ -32,22 +220,22 @@ def load_db():
                 db["completed_requests"] = []
             return db
     except FileNotFoundError:
-        print("⚠️  Файл database.json не найден, создаём новый")
+        logger.warning("Файл database.json не найден, создаём новый")
         return {"users": {}, "active_requests": [], "completed_requests": []}
     except json.JSONDecodeError as e:
-        print(f"❌ Ошибка чтения database.json: {e}")
+        logger.error(f"Ошибка чтения database.json: {e}")
         # Создаём резервную копию повреждённого файла
         import shutil
         import time
         backup_name = f"database_corrupted_{int(time.time())}.json"
         try:
             shutil.copy("database.json", backup_name)
-            print(f"💾 Создана резервная копия: {backup_name}")
+            logger.info(f"Создана резервная копия: {backup_name}")
         except:
             pass
         return {"users": {}, "active_requests": [], "completed_requests": []}
     except Exception as e:
-        print(f"❌ Неожиданная ошибка при загрузке БД: {e}")
+        logger.error(f"Неожиданная ошибка при загрузке БД: {e}")
         return {"users": {}, "active_requests": [], "completed_requests": []}
 
 def save_db(db):
@@ -62,7 +250,7 @@ def save_db(db):
         import shutil
         shutil.move(temp_file, "database.json")
     except Exception as e:
-        print(f"❌ Ошибка сохранения БД: {e}")
+        logger.error(f"Ошибка сохранения БД: {e}")
         # Удаляем временный файл если он существует
         if os.path.exists("database.json.tmp"):
             try:
@@ -112,8 +300,8 @@ def get_updates(marker=None):
         data = response.json()
         return data
     else:
-        print(f"Ошибка получения обновлений: {response.status_code}")
-        print(f"Ответ сервера: {response.text}")
+        logger.error(f"Ошибка получения обновлений: {response.status_code}")
+        logger.error(f"Ответ сервера: {response.text}")
         return None
 
 def send_message(chat_id, text, attachments=None, markup=None):
@@ -131,10 +319,10 @@ def send_message(chat_id, text, attachments=None, markup=None):
     response = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data)
 
     if response.status_code == 200:
-        print(f"Сообщение отправлено в чат {chat_id}: {text}", flush=True)
+        logger.info(f"Сообщение отправлено в чат {chat_id}: {text}")
         return response.json()
     else:
-        print(f"Ошибка отправки сообщения: {response.status_code}, {response.text}", flush=True)
+        logger.error(f"Ошибка отправки сообщения: {response.status_code}, {response.text}")
         return None
 
 def send_location(chat_id, latitude, longitude):
@@ -156,10 +344,10 @@ def send_location(chat_id, latitude, longitude):
     response = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data)
 
     if response.status_code == 200:
-        print(f"Геолокация отправлена в чат {chat_id}: {latitude}, {longitude}", flush=True)
+        logger.info(f"Геолокация отправлена в чат {chat_id}: {latitude}, {longitude}")
         return response.json()
     else:
-        print(f"Ошибка отправки геолокации: {response.status_code}, {response.text}", flush=True)
+        logger.error(f"Ошибка отправки геолокации: {response.status_code}, {response.text}")
         return None
 
 def create_user_mention(text, username=None, user_id=None):
@@ -215,16 +403,16 @@ def forward_message(chat_id, message_id, text=None):
         }
     }
 
-    print(f"DEBUG forward: chat_id={chat_id}, message_id={message_id}, text={text}", flush=True)
-    print(f"DEBUG forward data: {data}", flush=True)
+    logger.debug(f"DEBUG forward: chat_id={chat_id}, message_id={message_id}, text={text}")
+    logger.debug(f"DEBUG forward data: {data}")
 
     response = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data)
 
     if response.status_code == 200:
-        print(f"Сообщение переслано в чат {chat_id}", flush=True)
+        logger.info(f"Сообщение переслано в чат {chat_id}")
         return response.json()
     else:
-        print(f"Ошибка пересылки сообщения: {response.status_code}, {response.text}", flush=True)
+        logger.error(f"Ошибка пересылки сообщения: {response.status_code}, {response.text}")
         return None
 
 def answer_callback(callback_id, text=None):
@@ -242,10 +430,10 @@ def answer_callback(callback_id, text=None):
     response = requests.post(f"{BASE_URL}/answers", headers=HEADERS, params=params, json=data)
 
     if response.status_code == 200:
-        print(f"Ответ на callback отправлен", flush=True)
+        logger.info("Ответ на callback отправлен")
         return response.json()
     else:
-        print(f"Ошибка ответа на callback: {response.status_code}, {response.text}", flush=True)
+        logger.error(f"Ошибка ответа на callback: {response.status_code}, {response.text}")
         return None
 
 def get_bot_info():
@@ -255,7 +443,7 @@ def get_bot_info():
     if response.status_code == 200:
         return response.json()
     else:
-        print(f"Ошибка получения информации о боте: {response.status_code}")
+        logger.error(f"Ошибка получения информации о боте: {response.status_code}")
         return None
 
 def get_bot_link(start_payload=None):
@@ -295,16 +483,26 @@ def handle_start(chat_id, username, user_id=None):
 
 def show_needy_menu(chat_id):
     """Показывает главное меню для нуждающегося"""
+    # Изменяем текст кнопки в зависимости от статуса нейронки
+    image_button_text = "Изображение → Текст"
+    if not VISION_MODEL_ENABLED:
+        image_button_text += " (заглушка)"
+
     buttons = [
         [{"type": "callback", "text": "Запросить звонок волонтёра", "payload": "request_call"}],
         [{"type": "callback", "text": "Голосовое → Текст (скоро)", "payload": "voice_to_text"}],
         [{"type": "callback", "text": "Текст → Голосовое (скоро)", "payload": "text_to_voice"}],
-        [{"type": "callback", "text": "Изображение → Текст (скоро)", "payload": "image_to_text"}],
+        [{"type": "callback", "text": image_button_text, "payload": "image_to_text"}],
         [{"type": "callback", "text": "SOS", "payload": "sos"}]
     ]
+
+    menu_text = "Выберите функцию:"
+    if not VISION_MODEL_ENABLED:
+        menu_text += "\n\n⚠️ Vision Model работает в режиме заглушек"
+
     send_message_with_keyboard(
         chat_id,
-        "Выберите функцию:",
+        menu_text,
         buttons
     )
 
@@ -333,7 +531,6 @@ def handle_request_call(chat_id, username, user_id=None, message_id=None):
         "needy_chat_id": str(chat_id),
         "needy_username": username,
         "needy_user_id": user_id,
-#        "needy_message_id": message_id,  # Сохраняем ID сообщения для пересылки
         "created_at": datetime.now().isoformat(),
         "status": "pending"
     }
@@ -389,20 +586,6 @@ def handle_accept_request(volunteer_chat_id, request_id, volunteer_username, cal
 
     # Уведомляем волонтёра
     send_message(volunteer_chat_id, "✅ Вы приняли запрос!")
-
-
-    # # Пересылаем сообщение /start нуждающегося, чтобы волонтёр мог нажать на отправителя
-    # needy_user_data = db["users"].get(request["needy_chat_id"])
-    # print(f"DEBUG: needy_user_data = {needy_user_data}", flush=True)
-    # if needy_user_data and needy_user_data.get("start_message_id"):
-    #     print(f"DEBUG: Пересылаем сообщение {needy_user_data.get('start_message_id')}", flush=True)
-    #     forward_message(
-    #         volunteer_chat_id,
-    #         needy_user_data["start_message_id"],
-    #         text="Нажмите на имя отправителя, чтобы открыть профиль и написать ему"
-    #     )
-    # else:
-    #     print(f"DEBUG: start_message_id отсутствует у пользователя {request['needy_chat_id']}", flush=True)
 
     # Уведомляем нуждающегося с mention волонтёра
     volunteer_user_id = db["users"].get(str(volunteer_chat_id), {}).get("user_id")
@@ -491,6 +674,79 @@ def handle_sos_location(chat_id, username, user_id, location):
 
     send_message(chat_id, f"✅ Сигнал SOS с вашим местоположением отправлен {volunteers_notified} волонтёрам!")
 
+def handle_image_to_text_request(chat_id):
+    """Обработка запроса на распознавание изображения"""
+    db = load_db()
+
+    # Создаём запрос на ожидание фото
+    request_id = str(int(time.time()))
+    image_request = {
+        "id": request_id,
+        "chat_id": str(chat_id),
+        "created_at": datetime.now().isoformat(),
+        "status": "waiting_for_image",
+        "type": "image_to_text"
+    }
+
+    db["active_requests"].append(image_request)
+    save_db(db)
+
+    send_message(chat_id, "📷 Отправьте мне фотографию, и я опишу что на ней изображено.\n\nПросто прикрепите фото к следующему сообщению.")
+
+def handle_image_processing(chat_id, image_url):
+    """Обработка полученного изображения"""
+    db = load_db()
+
+    # Проверяем, есть ли активный запрос на распознавание от этого пользователя
+    image_request = None
+    for req in db["active_requests"]:
+        if (req.get("type") == "image_to_text" and
+            req.get("chat_id") == str(chat_id) and
+            req.get("status") == "waiting_for_image"):
+            image_request = req
+            break
+
+    if not image_request:
+        # Если запроса нет, всё равно обрабатываем (для удобства)
+        logger.info(f"Нет активного запроса на распознавание, но обрабатываем фото от {chat_id}")
+
+    try:
+        # Отправляем сообщение о начале обработки
+        send_message(chat_id, "⏳ Обрабатываю изображение, подождите немного...")
+
+        # Скачиваем изображение
+        image_filename = f"image_{chat_id}_{int(time.time())}.jpg"
+        image_path = os.path.join("downloads", image_filename)
+
+        if not download_image(image_url, image_path):
+            send_message(chat_id, "❌ Ошибка при скачивании изображения. Попробуйте ещё раз.")
+            return
+
+        # Распознаём изображение
+        description = describe_image(image_path)
+
+        # Отправляем результат
+        send_message(chat_id, f"📝 Описание изображения:\n\n{description}")
+
+        # Удаляем запрос из активных
+        if image_request:
+            db["active_requests"] = [r for r in db["active_requests"] if r["id"] != image_request["id"]]
+            image_request["status"] = "completed"
+            image_request["completed_at"] = datetime.now().isoformat()
+            db["completed_requests"].append(image_request)
+            save_db(db)
+
+        # Удаляем временный файл изображения
+        try:
+            os.remove(image_path)
+            logger.info(f"Временный файл {image_path} удалён")
+        except:
+            pass
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке изображения: {e}", exc_info=True)
+        send_message(chat_id, f"❌ Произошла ошибка при обработке изображения: {str(e)}")
+
 def handle_switch_role(chat_id, username, user_id=None):
     """Переключение роли пользователя для тестирования"""
     user = get_user(chat_id)
@@ -513,7 +769,7 @@ def handle_switch_role(chat_id, username, user_id=None):
 
 def handle_callback(callback_id, payload, chat_id, username, user_id=None, message_id=None):
     """Обработка нажатий на кнопки"""
-    print(f"Callback: {payload} от {chat_id}", flush=True)
+    logger.info(f"Callback: {payload} от {chat_id}")
 
     if payload == "role_needy":
         # Получаем start_message_id если он был сохранён
@@ -542,13 +798,17 @@ def handle_callback(callback_id, payload, chat_id, username, user_id=None, messa
         handle_sos(chat_id, username, user_id)
         answer_callback(callback_id)
 
-    elif payload in ["voice_to_text", "text_to_voice", "image_to_text"]:
+    elif payload == "image_to_text":
+        handle_image_to_text_request(chat_id)
+        answer_callback(callback_id)
+
+    elif payload in ["voice_to_text", "text_to_voice"]:
         answer_callback(callback_id, "Эта функция скоро будет доступна!")
 
 # === Главный цикл ===
 
 def main():
-    print("Запуск бота волонтёр-нуждающийся для Max...")
+    logger.info("Запуск бота волонтёр-нуждающийся для Max...")
 
     # Создаём папку для загрузок, если её нет
     os.makedirs("downloads", exist_ok=True)
@@ -556,12 +816,12 @@ def main():
     # Получаем информацию о боте
     bot_info = get_bot_info()
     if bot_info:
-        print(f"Бот запущен: {bot_info.get('name')} (@{bot_info.get('username')})")
+        logger.info(f"Бот запущен: {bot_info.get('name')} (@{bot_info.get('username')})")
     else:
-        print("Не удалось получить информацию о боте. Проверьте токен.")
+        logger.error("Не удалось получить информацию о боте. Проверьте токен.")
         return
 
-    print("Ожидание сообщений...")
+    logger.info("Ожидание сообщений...")
 
     marker = None
     error_count = 0
@@ -603,11 +863,13 @@ def main():
 
                                 # DEBUG: показываем что есть в sender
                                 if text and text.startswith('/debug'):
-                                    print(f"DEBUG sender: {sender}", flush=True)
+                                    logger.debug(f"DEBUG sender: {sender}")
 
-                                # Проверяем наличие геолокации
+                                # Проверяем наличие вложений (геолокация, изображения и т.д.)
                                 attachments = body.get('attachments', [])
                                 location = None
+                                image_url = None
+
                                 for attachment in attachments:
                                     if attachment.get('type') == 'location':
                                         location = {
@@ -615,14 +877,23 @@ def main():
                                             'longitude': attachment.get('longitude')
                                         }
                                         break
+                                    elif attachment.get('type') == 'image':
+                                        # Получаем URL изображения
+                                        image_url = attachment.get('payload', {}).get('url')
+                                        break
 
                                 # Обрабатываем геолокацию для SOS
                                 if chat_id and location:
-                                    print(f"Получена геолокация из чата {chat_id}: {location['latitude']}, {location['longitude']}", flush=True)
+                                    logger.info(f"Получена геолокация из чата {chat_id}: {location['latitude']}, {location['longitude']}")
                                     handle_sos_location(chat_id, username, user_id, location)
 
+                                # Обрабатываем изображения
+                                elif chat_id and image_url:
+                                    logger.info(f"Получено изображение из чата {chat_id}: {image_url}")
+                                    handle_image_processing(chat_id, image_url)
+
                                 elif chat_id and text:
-                                    print(f"Получено сообщение из чата {chat_id}: {text}", flush=True)
+                                    logger.info(f"Получено сообщение из чата {chat_id}: {text}")
 
                                     # Обработка команд
                                     if text.strip().lower() in ['/start', 'start', 'старт']:
@@ -669,22 +940,20 @@ def main():
                                     handle_callback(callback_id, payload, chat_id, username, user_id, message_id)
 
                         except Exception as e:
-                            print(f"⚠️  Ошибка при обработке обновления: {e}")
-                            import traceback
-                            traceback.print_exc()
+                            logger.error(f"Ошибка при обработке обновления: {e}", exc_info=True)
                             # Продолжаем обработку следующих обновлений
 
             # Небольшая задержка перед следующим запросом
             time.sleep(1)
 
         except KeyboardInterrupt:
-            print("\nБот остановлен")
+            logger.info("Бот остановлен")
             break
         except requests.exceptions.ConnectionError as e:
             error_count += 1
-            print(f"⚠️  Ошибка соединения ({error_count}/{max_errors}): {e}")
+            logger.warning(f"Ошибка соединения ({error_count}/{max_errors}): {e}")
             if error_count >= max_errors:
-                print("❌ Слишком много ошибок соединения подряд. Перезапуск через 30 секунд...")
+                logger.error("Слишком много ошибок соединения подряд. Перезапуск через 30 секунд...")
                 time.sleep(30)
                 error_count = 0
                 marker = None  # Сбрасываем marker при перезапуске
@@ -692,9 +961,9 @@ def main():
                 time.sleep(5)
         except requests.exceptions.Timeout as e:
             error_count += 1
-            print(f"⚠️  Таймаут запроса ({error_count}/{max_errors}): {e}")
+            logger.warning(f"Таймаут запроса ({error_count}/{max_errors}): {e}")
             if error_count >= max_errors:
-                print("❌ Слишком много таймаутов подряд. Перезапуск через 30 секунд...")
+                logger.error("Слишком много таймаутов подряд. Перезапуск через 30 секунд...")
                 time.sleep(30)
                 error_count = 0
                 marker = None
@@ -702,15 +971,13 @@ def main():
                 time.sleep(5)
         except json.JSONDecodeError as e:
             error_count += 1
-            print(f"⚠️  Ошибка парсинга JSON ({error_count}/{max_errors}): {e}")
+            logger.warning(f"Ошибка парсинга JSON ({error_count}/{max_errors}): {e}")
             time.sleep(3)
         except Exception as e:
             error_count += 1
-            print(f"❌ Неожиданная ошибка ({error_count}/{max_errors}): {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Неожиданная ошибка ({error_count}/{max_errors}): {e}", exc_info=True)
             if error_count >= max_errors:
-                print("❌ Слишком много ошибок подряд. Перезапуск через 30 секунд...")
+                logger.error("Слишком много ошибок подряд. Перезапуск через 30 секунд...")
                 time.sleep(30)
                 error_count = 0
                 marker = None

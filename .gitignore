@@ -5,3 +5,13 @@
 /downloads
 /schema.sql
 /venv
+/models
+
+# Переменные окружения
+.env
+
+# Логи
+*.log
+
+# Резервные копии БД
+database_corrupted_*.json
