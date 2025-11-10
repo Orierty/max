@@ -4,10 +4,6 @@
 import os
 import logging
 import requests
-import torch
-from PIL import Image
-from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
-from qwen_vl_utils import process_vision_info
 
 from bot.config import VISION_MODEL_ENABLED, MODELS_DIR
 
@@ -16,6 +12,20 @@ logger = logging.getLogger(__name__)
 # Глобальные переменные для модели
 vision_model = None
 vision_processor = None
+
+# Импортируем AI библиотеки только если нейронка включена
+if VISION_MODEL_ENABLED:
+    try:
+        import torch
+        from PIL import Image
+        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+        from qwen_vl_utils import process_vision_info
+        logger.info("AI библиотеки успешно загружены")
+    except ImportError as e:
+        logger.error(f"Ошибка импорта AI библиотек: {e}")
+        logger.error("Установите зависимости: pip install torch transformers pillow qwen-vl-utils")
+else:
+    logger.info("Vision Model отключена (VISION_MODEL_ENABLED=false), AI библиотеки не загружаются")
 
 def init_vision_model():
     """Инициализирует модель Qwen2-VL для распознавания изображений"""

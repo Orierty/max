@@ -15,9 +15,21 @@
 
 ### 1. Накати зависимости
 
+**Базовые (без нейронки):**
+
 ```bash
 pip install -r requirements.txt
 ```
+
+Этого хватит если `VISION_MODEL_ENABLED=false` (режим заглушек)
+
+**Если хочешь нейронку для распознавания картинок:**
+
+```bash
+pip install -r requirements.txt
+```
+
+Потом ставь `VISION_MODEL_ENABLED=true` в .env
 
 ### 2. Настройка PostgreSQL
 

@@ -1,12 +1,13 @@
+# Основные зависимости 
 requests
 python-dotenv
-transformers
-torch
-pillow
-qwen-vl-utils
-accelerate
-optimum
 psycopg2-binary
 
-# Опционально для GPTQ квантизации (требует компиляцию, может не работать на Windows)
-# auto-gptq
+#только если нейронка есть
+
+# transformers
+# torch
+# pillow
+# qwen-vl-utils
+# accelerate
+# optimum
