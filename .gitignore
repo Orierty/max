@@ -1,11 +1,11 @@
 /.DS_Store
 /.claude
-/database.py
 /db_config.example.py
 /downloads
-/schema.sql
 /venv
 /models
+__pycache__/
+*.pyc
 
 # Переменные окружения
 .env

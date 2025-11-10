@@ -11,6 +11,16 @@ from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 import torch
 
+# Импортируем функции для работы с PostgreSQL
+from database import (
+    init_db_pool, close_db_pool,
+    get_user, save_user,
+    create_request, assign_volunteer_to_request, complete_request,
+    get_request, get_active_requests,
+    create_review, add_tags_to_user, get_volunteer_stats,
+    get_all_users_by_role
+)
+
 # Загружаем переменные окружения из .env файла
 load_dotenv()
 
@@ -204,87 +214,8 @@ def download_image(url, save_path):
         logger.error(f"Ошибка при скачивании изображения: {e}")
         return False
 
-def load_db():
-    """Загружает базу данных из JSON файла"""
-    try:
-        with open("database.json", "r", encoding="utf-8") as f:
-            db = json.load(f)
-            # Проверяем структуру базы данных
-            if not isinstance(db, dict):
-                raise ValueError("База данных повреждена: не является словарём")
-            if "users" not in db:
-                db["users"] = {}
-            if "active_requests" not in db:
-                db["active_requests"] = []
-            if "completed_requests" not in db:
-                db["completed_requests"] = []
-            return db
-    except FileNotFoundError:
-        logger.warning("Файл database.json не найден, создаём новый")
-        return {"users": {}, "active_requests": [], "completed_requests": []}
-    except json.JSONDecodeError as e:
-        logger.error(f"Ошибка чтения database.json: {e}")
-        # Создаём резервную копию повреждённого файла
-        import shutil
-        import time
-        backup_name = f"database_corrupted_{int(time.time())}.json"
-        try:
-            shutil.copy("database.json", backup_name)
-            logger.info(f"Создана резервная копия: {backup_name}")
-        except:
-            pass
-        return {"users": {}, "active_requests": [], "completed_requests": []}
-    except Exception as e:
-        logger.error(f"Неожиданная ошибка при загрузке БД: {e}")
-        return {"users": {}, "active_requests": [], "completed_requests": []}
-
-def save_db(db):
-    """Сохраняет базу данных в JSON файл безопасно через временный файл"""
-    try:
-        # Сохраняем во временный файл
-        temp_file = "database.json.tmp"
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(db, f, ensure_ascii=False, indent=2)
-
-        # Если запись успешна, заменяем основной файл
-        import shutil
-        shutil.move(temp_file, "database.json")
-    except Exception as e:
-        logger.error(f"Ошибка сохранения БД: {e}")
-        # Удаляем временный файл если он существует
-        if os.path.exists("database.json.tmp"):
-            try:
-                os.remove("database.json.tmp")
-            except:
-                pass
-
-def get_user(chat_id):
-    """Получает данные пользователя"""
-    db = load_db()
-    return db["users"].get(str(chat_id))
-
-def save_user(chat_id, role, username=None, user_id=None, start_message_id=None):
-    """Сохраняет пользователя в базу"""
-    db = load_db()
-
-    # Получаем существующие данные пользователя, если есть
-    existing_user = db["users"].get(str(chat_id), {})
-
-    user_data = {
-        "role": role,  # "volunteer" или "needy"
-        "username": username,
-        "user_id": user_id,
-        "registered_at": datetime.now().isoformat()
-    }
-
-    # Сохраняем start_message_id, если он передан ИЛИ если он уже есть у пользователя
-    if start_message_id:
-        user_data["start_message_id"] = start_message_id
-    elif existing_user.get("start_message_id"):
-        user_data["start_message_id"] = existing_user["start_message_id"]
-
-    db["users"][str(chat_id)] = user_data
-    save_db(db)
+# === Все функции для работы с БД теперь импортируются из database.py ===
+# Эти функции используют PostgreSQL вместо JSON
 
 # === API функции ===
 
@@ -522,35 +453,30 @@ def handle_role_selection(chat_id, role, username, user_id=None, start_message_i
 
 def handle_request_call(chat_id, username, user_id=None, message_id=None):
     """Обработка запроса на звонок от волонтёра"""
-    db = load_db()
+    # Создаём запрос в PostgreSQL
+    request_id = create_request(chat_id, urgency="normal")
 
-    # Создаём запрос
-    request_id = str(int(time.time()))
-    request = {
-        "id": request_id,
-        "needy_chat_id": str(chat_id),
-        "needy_username": username,
-        "needy_user_id": user_id,
-        "created_at": datetime.now().isoformat(),
-        "status": "pending"
-    }
+    # Получаем теги пользователя для отображения волонтёрам
+    user = get_user(chat_id)
+    tags_text = ""
+    if user and user.get("tags"):
+        tags_text = f"\nТеги: {', '.join(user['tags'])}"
 
-    db["active_requests"].append(request)
-    save_db(db)
+    # Получаем всех волонтёров из PostgreSQL
+    volunteers = get_all_users_by_role("volunteer")
 
     # Отправляем запрос всем волонтёрам
     volunteers_notified = 0
-    for user_chat_id, user_data in db["users"].items():
-        if user_data.get("role") == "volunteer":
-            buttons = [
-                [{"type": "callback", "text": "✅ Принять запрос", "payload": f"accept_request_{request_id}"}]
-            ]
-            send_message_with_keyboard(
-                user_chat_id,
-                f"🆘 Новый запрос на звонок!\n\nОт: @{username or 'неизвестно'}\nВремя: {datetime.now().strftime('%H:%M')}",
-                buttons
-            )
-            volunteers_notified += 1
+    for user_chat_id, user_data in volunteers.items():
+        buttons = [
+            [{"type": "callback", "text": "✅ Принять запрос", "payload": f"accept_request_{request_id}"}]
+        ]
+        send_message_with_keyboard(
+            user_chat_id,
+            f"🆘 Новый запрос на звонок!\n\nОт: @{username or 'неизвестно'}\nВремя: {datetime.now().strftime('%H:%M')}{tags_text}",
+            buttons
+        )
+        volunteers_notified += 1
 
     if volunteers_notified > 0:
         send_message(chat_id, f"✅ Ваш запрос отправлен {volunteers_notified} волонтёрам. Ожидайте ответа...")
@@ -559,43 +485,163 @@ def handle_request_call(chat_id, username, user_id=None, message_id=None):
 
 def handle_accept_request(volunteer_chat_id, request_id, volunteer_username, callback_id=None):
     """Обработка принятия запроса волонтёром"""
-    db = load_db()
+    # Получаем запрос из PostgreSQL
+    request = get_request(request_id)
 
-    # Ищем запрос
-    request = None
-    for req in db["active_requests"]:
-        if req["id"] == request_id and req["status"] == "pending":
-            request = req
-            break
-
-    if not request:
+    if not request or request["status"] != "pending":
         if callback_id:
             answer_callback(callback_id, "Этот запрос уже принят другим волонтёром")
         return
 
-    # Обновляем статус запроса
-    request["status"] = "accepted"
-    request["volunteer_chat_id"] = str(volunteer_chat_id)
-    request["volunteer_username"] = volunteer_username
-    request["accepted_at"] = datetime.now().isoformat()
+    # Обновляем статус запроса в PostgreSQL
+    assign_volunteer_to_request(request_id, volunteer_chat_id)
 
-    # Перемещаем в завершённые
-    db["active_requests"] = [r for r in db["active_requests"] if r["id"] != request_id]
-    db["completed_requests"].append(request)
-    save_db(db)
+    # Уведомляем волонтёра с кнопкой завершения диалога
+    buttons = [
+        [{"type": "callback", "text": "✅ Завершить диалог", "payload": f"complete_request_{request_id}"}]
+    ]
 
-    # Уведомляем волонтёра
-    send_message(volunteer_chat_id, "✅ Вы приняли запрос!")
+    # Получаем статистику волонтёра
+    stats = get_volunteer_stats(volunteer_chat_id)
+    stats_text = ""
+    if stats:
+        stats_text = f"\n\n📊 Ваша статистика:\nРейтинг: {stats['rating']:.1f} ⭐\nВсего звонков: {stats['call_count']}"
+
+    send_message_with_keyboard(
+        volunteer_chat_id,
+        f"✅ Вы приняли запрос!{stats_text}\n\nПосле завершения диалога нажмите кнопку ниже.",
+        buttons
+    )
 
     # Уведомляем нуждающегося с mention волонтёра
-    volunteer_user_id = db["users"].get(str(volunteer_chat_id), {}).get("user_id")
+    volunteer = get_user(volunteer_chat_id)
+    volunteer_user_id = volunteer.get("id") if volunteer else None
+
+    # Получаем user_id нуждающегося
+    needy_user_id = request.get("user_id")
 
     text, markup = create_user_mention(
         "✅ Волонтёр {mention} принял ваш запрос и скоро свяжется с вами!",
         username=volunteer_username,
         user_id=volunteer_user_id
     )
-    send_message(request["needy_chat_id"], text, markup=markup)
+    send_message(needy_user_id, text, markup=markup)
+
+def handle_complete_request(volunteer_chat_id, request_id):
+    """Обработка завершения диалога волонтёром"""
+    # Завершаем запрос
+    complete_request(request_id)
+
+    # Получаем информацию о запросе
+    request = get_request(request_id)
+    if not request:
+        send_message(volunteer_chat_id, "❌ Запрос не найден")
+        return
+
+    needy_user_id = request.get("user_id")
+    if not needy_user_id:
+        send_message(volunteer_chat_id, "❌ Не удалось найти пользователя")
+        return
+
+    # Предлагаем волонтёру добавить теги о нуждающемся
+    buttons = [
+        [{"type": "callback", "text": "👵 Бабушка/Дедушка", "payload": f"add_tag_{request_id}_elderly"}],
+        [{"type": "callback", "text": "👁️ Незрячий", "payload": f"add_tag_{request_id}_blind"}],
+        [{"type": "callback", "text": "📷 Плохая камера", "payload": f"add_tag_{request_id}_bad_camera"}],
+        [{"type": "callback", "text": "🎤 Плохой микрофон", "payload": f"add_tag_{request_id}_bad_mic"}],
+        [{"type": "callback", "text": "🦻 Плохо слышит", "payload": f"add_tag_{request_id}_hearing"}],
+        [{"type": "callback", "text": "✅ Пропустить", "payload": f"skip_tags_{request_id}"}]
+    ]
+
+    send_message_with_keyboard(
+        volunteer_chat_id,
+        "✅ Диалог завершён!\n\nЕсли хотите, добавьте теги о пользователе (это поможет другим волонтёрам):",
+        buttons
+    )
+
+    # Отправляем запрос на оценку нуждающемуся
+    buttons_rating = [
+        [
+            {"type": "callback", "text": "⭐", "payload": f"rate_volunteer_{request_id}_1"},
+            {"type": "callback", "text": "⭐⭐", "payload": f"rate_volunteer_{request_id}_2"},
+            {"type": "callback", "text": "⭐⭐⭐", "payload": f"rate_volunteer_{request_id}_3"}
+        ],
+        [
+            {"type": "callback", "text": "⭐⭐⭐⭐", "payload": f"rate_volunteer_{request_id}_4"},
+            {"type": "callback", "text": "⭐⭐⭐⭐⭐", "payload": f"rate_volunteer_{request_id}_5"}
+        ]
+    ]
+
+    send_message_with_keyboard(
+        needy_user_id,
+        "✅ Диалог с волонтёром завершён!\n\nПожалуйста, оцените работу волонтёра:",
+        buttons_rating
+    )
+
+def handle_add_tag(volunteer_chat_id, request_id, tag):
+    """Обработка добавления тега к нуждающемуся"""
+    request = get_request(request_id)
+    if not request:
+        send_message(volunteer_chat_id, "❌ Запрос не найден")
+        return
+
+    needy_user_id = request.get("user_id")
+
+    # Словарь тегов
+    tag_names = {
+        "elderly": "Бабушка/Дедушка",
+        "blind": "Незрячий",
+        "bad_camera": "Плохая камера",
+        "bad_mic": "Плохой микрофон",
+        "hearing": "Плохо слышит"
+    }
+
+    tag_name = tag_names.get(tag, tag)
+    add_tags_to_user(needy_user_id, [tag_name])
+
+    send_message(volunteer_chat_id, f"✅ Тег '{tag_name}' добавлен!")
+
+    # Показываем снова меню с тегами, но убираем добавленный тег
+    buttons = []
+    for tag_key, tag_label in tag_names.items():
+        if tag_key != tag:
+            buttons.append([{"type": "callback", "text": f"{tag_label}", "payload": f"add_tag_{request_id}_{tag_key}"}])
+
+    buttons.append([{"type": "callback", "text": "✅ Готово", "payload": f"skip_tags_{request_id}"}])
+
+    send_message_with_keyboard(
+        volunteer_chat_id,
+        "Хотите добавить ещё теги?",
+        buttons
+    )
+
+def handle_skip_tags(volunteer_chat_id, request_id):
+    """Обработка пропуска добавления тегов"""
+    send_message(volunteer_chat_id, "✅ Спасибо за помощь!\n\nВозвращайтесь, когда будете готовы помочь ещё.")
+
+def handle_rate_volunteer(needy_chat_id, request_id, rating):
+    """Обработка оценки волонтёра нуждающимся"""
+    # Создаём отзыв
+    review_id = create_review(request_id, rating, "")
+
+    if review_id:
+        # Предлагаем оставить комментарий (опционально)
+        send_message(needy_chat_id, f"✅ Спасибо за оценку ({rating} ⭐)!\n\nЕсли хотите, можете написать комментарий волонтёру (просто отправьте сообщение).\n\nИли выберите функцию из меню:")
+        show_needy_menu(needy_chat_id)
+
+        # Уведомляем волонтёра о полученном рейтинге
+        request = get_request(request_id)
+        if request and request.get("assigned_volunteer_id"):
+            volunteer_id = request["assigned_volunteer_id"]
+            stats = get_volunteer_stats(volunteer_id)
+
+            stats_text = ""
+            if stats:
+                stats_text = f"\n\n📊 Ваша статистика:\nРейтинг: {stats['rating']:.1f} ⭐\nВсего звонков: {stats['call_count']}"
+
+            send_message(volunteer_id, f"⭐ Вы получили оценку {rating} звёзд!{stats_text}")
+    else:
+        send_message(needy_chat_id, "❌ Не удалось сохранить оценку. Попробуйте позже.")
 
 def handle_sos(chat_id, username, user_id=None):
     """Обработка кнопки SOS"""
@@ -794,6 +840,32 @@ def handle_callback(callback_id, payload, chat_id, username, user_id=None, messa
         handle_accept_request(chat_id, request_id, username, callback_id)
         answer_callback(callback_id)
 
+    elif payload.startswith("complete_request_"):
+        request_id = payload.replace("complete_request_", "")
+        handle_complete_request(chat_id, request_id)
+        answer_callback(callback_id)
+
+    elif payload.startswith("add_tag_"):
+        # Формат: add_tag_{request_id}_{tag}
+        parts = payload.replace("add_tag_", "").split("_", 1)
+        if len(parts) == 2:
+            request_id, tag = parts
+            handle_add_tag(chat_id, request_id, tag)
+        answer_callback(callback_id)
+
+    elif payload.startswith("skip_tags_"):
+        request_id = payload.replace("skip_tags_", "")
+        handle_skip_tags(chat_id, request_id)
+        answer_callback(callback_id)
+
+    elif payload.startswith("rate_volunteer_"):
+        # Формат: rate_volunteer_{request_id}_{rating}
+        parts = payload.replace("rate_volunteer_", "").rsplit("_", 1)
+        if len(parts) == 2:
+            request_id, rating = parts
+            handle_rate_volunteer(chat_id, request_id, int(rating))
+        answer_callback(callback_id)
+
     elif payload == "sos":
         handle_sos(chat_id, username, user_id)
         answer_callback(callback_id)
@@ -810,6 +882,11 @@ def handle_callback(callback_id, payload, chat_id, username, user_id=None, messa
 def main():
     logger.info("Запуск бота волонтёр-нуждающийся для Max...")
 
+    # Инициализируем подключение к PostgreSQL
+    if not init_db_pool():
+        logger.error("Не удалось подключиться к PostgreSQL. Проверьте настройки в .env")
+        return
+
     # Создаём папку для загрузок, если её нет
     os.makedirs("downloads", exist_ok=True)
 
@@ -819,6 +896,7 @@ def main():
         logger.info(f"Бот запущен: {bot_info.get('name')} (@{bot_info.get('username')})")
     else:
         logger.error("Не удалось получить информацию о боте. Проверьте токен.")
+        close_db_pool()
         return
 
     logger.info("Ожидание сообщений...")
@@ -985,4 +1063,10 @@ def main():
                 time.sleep(5)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен пользователем")
+    finally:
+        close_db_pool()
+        logger.info("Завершение работы бота")
