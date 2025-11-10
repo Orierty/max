@@ -75,7 +75,6 @@ max/
 │   └── models/              # (зарезервировано для будущих моделей)
 ├── database.py              # Работа с PostgreSQL
 ├── schema.sql               # SQL схема базы данных
-├── migrate_to_postgres.py   # Миграция из JSON в PostgreSQL
 ├── main.py                  # Точка входа (новый главный файл)
 ├── max_echo_bot.py          # Старый главный файл (deprecated)
 ├── requirements.txt         # Зависимости Python
@@ -86,7 +85,6 @@ max/
 ├── models/                  # Локальные AI модели
 └── docs/                    # Документация
     ├── PROJECT_STRUCTURE.md
-    └── POSTGRES_SETUP.md
 ```
 
 ## Основные модули
