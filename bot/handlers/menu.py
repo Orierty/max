@@ -3,7 +3,7 @@
 """
 import logging
 from database import save_user
-from bot.utils import send_message, send_message_with_keyboard
+from bot.utils import send_message, send_message_with_keyboard, send_message_with_reply_keyboard
 from bot.config import VISION_MODEL_ENABLED
 
 logger = logging.getLogger(__name__)
@@ -28,27 +28,30 @@ def show_needy_menu(chat_id):
     if not VISION_MODEL_ENABLED:
         image_button_text += " (заглушка)"
 
-    buttons = [
-        [{"type": "callback", "text": "Запросить звонок волонтёра", "payload": "request_call"}],
-        [{"type": "callback", "text": "Голосовое → Текст (скоро)", "payload": "voice_to_text"}],
-        [{"type": "callback", "text": "Текст → Голосовое (скоро)", "payload": "text_to_voice"}],
+    # Inline кнопки (появляются под сообщением)
+    inline_buttons = [
+        [{"type": "callback", "text": "📞 Запросить звонок волонтёра", "payload": "request_call"}],
+        [{"type": "callback", "text": "🎤 Голосовое → Текст", "payload": "voice_to_text"}],
+        [{"type": "callback", "text": "🔊 Текст → Голосовое (скоро)", "payload": "text_to_voice"}],
         [{"type": "callback", "text": image_button_text, "payload": "image_to_text"}],
-        [{"type": "callback", "text": "SOS", "payload": "sos"}]
+        [{"type": "callback", "text": "🆘 SOS", "payload": "sos"}]
     ]
 
     menu_text = "Выберите функцию:"
     if not VISION_MODEL_ENABLED:
         menu_text += "\n\n⚠️ Vision Model работает в режиме заглушек"
 
+    # Отправляем с inline клавиатурой
     send_message_with_keyboard(
         chat_id,
         menu_text,
-        buttons
+        inline_buttons
     )
 
 def show_volunteer_menu(chat_id):
     """Показывает главное меню для волонтёра"""
-    buttons = [
+    # Inline кнопки
+    inline_buttons = [
         [{"type": "callback", "text": "📊 Моя статистика", "payload": "my_stats"}],
         [{"type": "callback", "text": "📋 Активные запросы", "payload": "active_requests"}]
     ]
@@ -56,7 +59,7 @@ def show_volunteer_menu(chat_id):
     send_message_with_keyboard(
         chat_id,
         "Добро пожаловать, волонтёр!\n\nВы будете получать уведомления о новых запросах.",
-        buttons
+        inline_buttons
     )
 
 def handle_role_selection(chat_id, role, username, user_id=None, start_message_id=None):

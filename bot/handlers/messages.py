@@ -4,10 +4,10 @@
 import logging
 from database import get_user, save_user
 from bot.utils import send_message
-from .menu import show_role_selection, show_needy_menu
+from .menu import show_role_selection, show_needy_menu, show_volunteer_menu
 from .image import handle_image_processing
 from .sos import handle_sos_location
-from .voice import handle_voice_message
+from .voice import handle_voice_message, handle_voice_to_text_only, voice_mode
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,14 @@ def handle_message(update):
     # Обрабатываем голосовые сообщения
     if voice_url:
         logger.info(f"Получено голосовое сообщение из чата {chat_id}: {voice_url}")
-        handle_voice_message(chat_id, voice_url, username, user_id)
+
+        # Проверяем режим обработки голоса
+        if chat_id in voice_mode and voice_mode[chat_id] == "text_only":
+            # Только распознавание текста, без команд
+            handle_voice_to_text_only(chat_id, voice_url)
+        else:
+            # Обычный режим с распознаванием команд
+            handle_voice_message(chat_id, voice_url, username, user_id)
         return
 
     # Обрабатываем текстовые сообщения
@@ -109,10 +116,23 @@ def handle_message(update):
     # Обработка команд
     if text.strip().lower() in ['/start', 'start', 'старт']:
         handle_start(chat_id, username, user_id)
-    elif text.strip().lower() in ['/menu', 'menu', 'меню']:
+    elif text.strip().lower() in ['/menu', 'menu', 'меню', '📋 меню']:
         user = get_user(chat_id)
-        if user and user.get("role") == "needy":
-            show_needy_menu(chat_id)
+        if user:
+            if user.get("role") == "needy":
+                show_needy_menu(chat_id)
+            elif user.get("role") == "volunteer":
+                show_volunteer_menu(chat_id)
+        else:
+            send_message(chat_id, "Используйте /start для регистрации")
+    elif text.strip().lower() in ['🔄 обновить', 'обновить', 'update']:
+        # Обновить = показать меню заново
+        user = get_user(chat_id)
+        if user:
+            if user.get("role") == "needy":
+                show_needy_menu(chat_id)
+            elif user.get("role") == "volunteer":
+                show_volunteer_menu(chat_id)
         else:
             send_message(chat_id, "Используйте /start для регистрации")
     elif text.strip().lower() in ['/switch_role', '/switch']:

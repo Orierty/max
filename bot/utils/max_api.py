@@ -44,6 +44,57 @@ def send_message(chat_id, text, attachments=None, markup=None):
         logger.error(f"Ошибка отправки сообщения: {response.status_code}, {response.text}")
         return None
 
+def send_message_with_reply_keyboard(chat_id, text, buttons):
+    """
+    Отправляет сообщение с обычной клавиатурой (reply keyboard)
+
+    Args:
+        chat_id: ID чата
+        text: Текст сообщения
+        buttons: Двумерный массив кнопок [[{"text": "Меню", "payload": "/menu"}], [...]]
+
+    Returns:
+        Response от API или None в случае ошибки
+    """
+    params = {"chat_id": chat_id}
+
+    # Формируем кнопки reply keyboard
+    formatted_buttons = []
+    for row in buttons:
+        formatted_row = []
+        for btn in row:
+            formatted_row.append({
+                "type": "message",  # SendMessageButton
+                "text": btn["text"],
+                "payload": btn.get("payload", btn["text"])
+            })
+        formatted_buttons.append(formatted_row)
+
+    data = {
+        "text": text,
+        "attachments": [
+            {
+                "type": "reply_keyboard",
+                "buttons": formatted_buttons,
+                "direct": False,
+                "direct_user_id": None
+            }
+        ]
+    }
+
+    logger.info(f"Отправка с reply keyboard в чат {chat_id}: {data}")
+
+    response = requests.post(f"{BASE_URL}/messages", headers=HEADERS, params=params, json=data)
+
+    logger.info(f"Ответ API для reply keyboard: status={response.status_code}, body={response.text}")
+
+    if response.status_code == 200:
+        logger.info(f"Сообщение с reply keyboard отправлено в чат {chat_id}")
+        return response.json()
+    else:
+        logger.error(f"Ошибка отправки с reply keyboard: {response.status_code}, {response.text}")
+        return None
+
 def send_message_with_keyboard(chat_id, text, buttons, markup=None):
     """Отправляет сообщение с inline клавиатурой"""
     attachments = [{

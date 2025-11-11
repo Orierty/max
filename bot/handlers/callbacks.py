@@ -11,6 +11,7 @@ from .requests import (
 )
 from .image import handle_image_to_text_request
 from .sos import handle_sos
+from .voice import handle_voice_to_text_request
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,11 @@ def handle_callback(update):
         handle_sos(chat_id, username, user_id)
         answer_callback(callback_id)
 
-    elif payload in ["voice_to_text", "text_to_voice"]:
+    elif payload == "voice_to_text":
+        handle_voice_to_text_request(chat_id)
+        answer_callback(callback_id)
+
+    elif payload == "text_to_voice":
         answer_callback(callback_id, "Эта функция скоро будет доступна!")
 
     # Обработка запросов волонтёров
@@ -102,6 +107,17 @@ def handle_callback(update):
     elif payload == "active_requests":
         # TODO: Показать активные запросы
         answer_callback(callback_id, "Список запросов в разработке")
+
+    # Навигационные кнопки
+    elif payload == "show_menu" or payload == "refresh_menu":
+        # Показываем меню в зависимости от роли пользователя
+        user = get_user(chat_id)
+        if user:
+            if user.get("role") == "needy":
+                show_needy_menu(chat_id)
+            elif user.get("role") == "volunteer":
+                show_volunteer_menu(chat_id)
+        answer_callback(callback_id)
 
     else:
         logger.warning(f"Неизвестный payload: {payload}")
