@@ -7,6 +7,7 @@ from bot.utils import send_message
 from .menu import show_role_selection, show_needy_menu
 from .image import handle_image_processing
 from .sos import handle_sos_location
+from .voice import handle_voice_message
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +60,11 @@ def handle_message(update):
     if not chat_id:
         return
 
-    # Проверяем наличие вложений (геолокация, изображения и т.д.)
+    # Проверяем наличие вложений (геолокация, изображения, голосовые и т.д.)
     attachments = body.get('attachments', [])
     location = None
     image_url = None
+    voice_url = None
 
     for attachment in attachments:
         if attachment.get('type') == 'location':
@@ -75,6 +77,10 @@ def handle_message(update):
             # Получаем URL изображения
             image_url = attachment.get('payload', {}).get('url')
             break
+        elif attachment.get('type') == 'audio' or attachment.get('type') == 'voice':
+            # Получаем URL голосового сообщения
+            voice_url = attachment.get('payload', {}).get('url')
+            break
 
     # Обрабатываем геолокацию для SOS
     if location:
@@ -86,6 +92,12 @@ def handle_message(update):
     if image_url:
         logger.info(f"Получено изображение из чата {chat_id}: {image_url}")
         handle_image_processing(chat_id, image_url)
+        return
+
+    # Обрабатываем голосовые сообщения
+    if voice_url:
+        logger.info(f"Получено голосовое сообщение из чата {chat_id}: {voice_url}")
+        handle_voice_message(chat_id, voice_url, username, user_id)
         return
 
     # Обрабатываем текстовые сообщения

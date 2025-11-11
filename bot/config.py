@@ -15,6 +15,9 @@ if not MAX_TOKEN:
 # Vision Model Settings
 VISION_MODEL_ENABLED = os.getenv("VISION_MODEL_ENABLED", "false").lower() == "true"
 
+# Voice Control Settings
+VOICE_ENABLED = os.getenv("VOICE_ENABLED", "false").lower() == "true"
+
 # Database Settings
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")

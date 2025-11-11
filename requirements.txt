@@ -1,13 +1,24 @@
-# Основные зависимости 
+# Основные зависимости (нужны всегда)
 requests
 python-dotenv
 psycopg2-binary
 
-#только если нейронка есть
+# AI библиотеки (раскомментируй если нужны)
 
+# Для Vision Model (распознавание изображений) - если VISION_MODEL_ENABLED=true
 # transformers
 # torch
 # pillow
 # qwen-vl-utils
 # accelerate
 # optimum
+
+# Для Voice Control (голосовое управление) - если VOICE_ENABLED=true
+# vosk          # Распознавание речи офлайн (не OpenAI!)
+# pydub         # Конвертация аудио форматов
+#
+
+# ВАЖНО! Для работы pydub нужен ffmpeg в системе:
+# Windows: winget install ffmpeg  ИЛИ  choco install ffmpeg
+# Linux: sudo apt install ffmpeg
+# Mac: brew install ffmpeg

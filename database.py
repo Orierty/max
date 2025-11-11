@@ -57,8 +57,8 @@ def create_tables():
             return False
 
         with conn.cursor() as cur:
-            # Читаем schema.sql
-            schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
+            # Читаем schema.sql из папки db
+            schema_path = os.path.join(os.path.dirname(__file__), "db", "schema.sql")
             with open(schema_path, 'r', encoding='utf-8') as f:
                 schema_sql = f.read()
 

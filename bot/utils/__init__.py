@@ -17,6 +17,11 @@ from .vision import (
     describe_image,
     download_image
 )
+from .voice import (
+    transcribe_voice,
+    parse_voice_command,
+    download_voice
+)
 
 __all__ = [
     'get_updates',
@@ -30,5 +35,8 @@ __all__ = [
     'create_user_mention',
     'init_vision_model',
     'describe_image',
-    'download_image'
+    'download_image',
+    'transcribe_voice',
+    'parse_voice_command',
+    'download_voice'
 ]
