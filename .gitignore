@@ -6,6 +6,7 @@
 /models
 __pycache__/
 *.pyc
+SECURITY_SYSTEM.md
 
 # Переменные окружения
 .env

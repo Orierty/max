@@ -34,6 +34,7 @@ def show_needy_menu(chat_id):
         [{"type": "callback", "text": "🎤 Голосовое → Текст", "payload": "voice_to_text"}],
         [{"type": "callback", "text": "🔊 Текст → Голосовое (скоро)", "payload": "text_to_voice"}],
         [{"type": "callback", "text": image_button_text, "payload": "image_to_text"}],
+        [{"type": "callback", "text": "👁️ Вызвать волонтера для описания фото", "payload": "request_photo_description"}],
         [{"type": "callback", "text": "🆘 SOS", "payload": "sos"}]
     ]
 
@@ -50,17 +51,87 @@ def show_needy_menu(chat_id):
 
 def show_volunteer_menu(chat_id):
     """Показывает главное меню для волонтёра"""
+    from database import get_volunteer_info
+
+    # Получаем информацию о волонтере
+    volunteer_info = get_volunteer_info(chat_id)
+
+    if not volunteer_info:
+        send_message(chat_id, "Ошибка загрузки данных волонтера.")
+        return
+
+    verification_status = volunteer_info.get('verification_status', 'unverified')
+    is_blocked = volunteer_info.get('is_blocked', False)
+
+    # Статусы
+    status_emoji = {
+        'unverified': '🆕',
+        'pending': '⏳',
+        'verified': '✅',
+        'trusted': '⭐'
+    }
+
+    status_text = {
+        'unverified': 'Новичок (не верифицирован)',
+        'pending': 'На проверке',
+        'verified': 'Верифицирован',
+        'trusted': 'Доверенный'
+    }
+
+    welcome_text = f"""
+Добро пожаловать, волонтёр!
+
+{status_emoji.get(verification_status, '❓')} Статус: {status_text.get(verification_status, 'Неизвестен')}
+"""
+
+    if is_blocked:
+        welcome_text += f"\n🚫 ВЫ ЗАБЛОКИРОВАНЫ\nПричина: {volunteer_info.get('block_reason', 'Не указана')}"
+        send_message(chat_id, welcome_text)
+        return
+
     # Inline кнопки
     inline_buttons = [
         [{"type": "callback", "text": "📊 Моя статистика", "payload": "my_stats"}],
-        [{"type": "callback", "text": "📋 Активные запросы", "payload": "active_requests"}]
+        [{"type": "callback", "text": "📋 Активные запросы", "payload": "active_requests"}],
+        [{"type": "callback", "text": "👁️ Описать фото для нуждающихся", "payload": "volunteer_photo_requests"}]
     ]
+
+    # Кнопка верификации только для неверифицированных
+    if verification_status == 'unverified':
+        welcome_text += "\n⚠️ Вы можете только описывать фото. Для приема заявок пройдите верификацию."
+        inline_buttons.append([{"type": "callback", "text": "✅ Подать заявку на верификацию", "payload": "request_verification"}])
+    elif verification_status == 'pending':
+        welcome_text += "\n⏳ Ваша заявка на верификацию рассматривается."
 
     send_message_with_keyboard(
         chat_id,
-        "Добро пожаловать, волонтёр!\n\nВы будете получать уведомления о новых запросах.",
+        welcome_text,
         inline_buttons
     )
+
+def show_moderator_menu(chat_id):
+    """Показывает меню модератора"""
+    from database import get_user
+
+    user = get_user(chat_id)
+    if not user or user['role'] != 'moderator':
+        send_message(chat_id, "У вас нет доступа к панели модератора.")
+        return
+
+    text = """
+🛡️ **Панель модератора**
+
+Выберите раздел для управления:
+"""
+
+    buttons = [
+        [
+            {"type": "callback", "text": "📋 Заявки на верификацию", "payload": "mod_verifications"},
+            {"type": "callback", "text": "⚠️ Жалобы", "payload": "mod_complaints"}
+        ]
+    ]
+
+    send_message_with_keyboard(chat_id, text, buttons)
 
 def handle_role_selection(chat_id, role, username, user_id=None, start_message_id=None):
     """Обработка выбора роли пользователем"""
@@ -69,6 +140,9 @@ def handle_role_selection(chat_id, role, username, user_id=None, start_message_i
     if role == "volunteer":
         send_message(chat_id, "✅ Вы зарегистрированы как волонтёр!\n\nВы будете получать уведомления о запросах на помощь от нуждающихся.")
         show_volunteer_menu(chat_id)
+    elif role == "moderator":
+        send_message(chat_id, "✅ Добро пожаловать в панель модератора!")
+        show_moderator_menu(chat_id)
     else:  # needy
         send_message(chat_id, "✅ Добро пожаловать!\n\nИнструкция:\n- Вы можете запросить звонок от волонтёра\n- Использовать функции распознавания голоса и текста\n- В экстренной ситуации нажмите кнопку SOS")
         show_needy_menu(chat_id)
