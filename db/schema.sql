@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS requests (
     status VARCHAR(20) NOT NULL CHECK (status IN ('pending', 'active', 'completed', 'cancelled')),
     urgency VARCHAR(20) DEFAULT 'normal' CHECK (urgency IN ('normal', 'urgent')),
     completion_time TIMESTAMP,
-    assigned_volunteer_id VARCHAR(100) REFERENCES users(id) ON DELETE SET NULL
+    assigned_volunteer_id VARCHAR(100) REFERENCES users(id) ON DELETE SET NULL,
+    current_wave INTEGER DEFAULT 0,
+    notified_volunteers TEXT[],
+    last_wave_sent_at TIMESTAMP
 );
 
 -- Таблица отзывов

@@ -821,6 +821,118 @@ def get_user_audit_log(user_id, limit=50):
         if conn:
             release_connection(conn)
 
+# === Функции для системы волн уведомлений ===
+
+def get_available_volunteers_for_wave(exclude_volunteer_ids=None, limit=15):
+    """Получает список доступных волонтёров для отправки заявки (случайные 15)"""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Исключаем волонтёров которым уже отправили + тех у кого есть активная заявка
+            exclude_clause = ""
+            if exclude_volunteer_ids:
+                exclude_clause = f"AND v.user_id NOT IN ({','.join(['%s'] * len(exclude_volunteer_ids))})"
+
+            query = f"""
+                SELECT v.user_id
+                FROM volunteers v
+                WHERE v.verification_status IN ('verified', 'trusted')
+                AND v.is_blocked = FALSE
+                AND NOT EXISTS (
+                    SELECT 1 FROM requests r
+                    WHERE r.assigned_volunteer_id = v.user_id
+                    AND r.status = 'active'
+                )
+                {exclude_clause}
+                ORDER BY RANDOM()
+                LIMIT %s
+            """
+
+            params = list(exclude_volunteer_ids) if exclude_volunteer_ids else []
+            params.append(limit)
+
+            cur.execute(query, params)
+            volunteers = cur.fetchall()
+            return [v['user_id'] for v in volunteers]
+    except Exception as e:
+        logger.error(f"Ошибка получения доступных волонтёров: {e}")
+        return []
+    finally:
+        if conn:
+            release_connection(conn)
+
+def update_request_wave(request_id, notified_volunteers):
+    """Обновляет информацию о волне уведомлений для заявки"""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE requests
+                SET
+                    current_wave = current_wave + 1,
+                    notified_volunteers = COALESCE(notified_volunteers, ARRAY[]::TEXT[]) || %s,
+                    last_wave_sent_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """, (notified_volunteers, str(request_id)))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Ошибка обновления волны заявки: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            release_connection(conn)
+
+def get_request_notified_volunteers(request_id):
+    """Получает список волонтёров, которым уже отправили уведомление"""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT notified_volunteers, current_wave, last_wave_sent_at
+                FROM requests
+                WHERE id = %s
+            """, (str(request_id),))
+            result = cur.fetchone()
+            if result:
+                return {
+                    'notified_volunteers': result['notified_volunteers'] or [],
+                    'current_wave': result['current_wave'] or 0,
+                    'last_wave_sent_at': result['last_wave_sent_at']
+                }
+            return None
+    except Exception as e:
+        logger.error(f"Ошибка получения уведомлённых волонтёров: {e}")
+        return None
+    finally:
+        if conn:
+            release_connection(conn)
+
+def volunteer_has_active_request(volunteer_id):
+    """Проверяет, есть ли у волонтёра активная заявка"""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) FROM requests
+                WHERE assigned_volunteer_id = %s
+                AND status = 'active'
+            """, (str(volunteer_id),))
+            count = cur.fetchone()[0]
+            return count > 0
+    except Exception as e:
+        logger.error(f"Ошибка проверки активных заявок волонтёра: {e}")
+        return False
+    finally:
+        if conn:
+            release_connection(conn)
+
 def close_db_pool():
     """Закрывает пул подключений"""
     global connection_pool

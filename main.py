@@ -36,6 +36,9 @@ from database import init_db_pool, close_db_pool
 from bot.handlers.messages import handle_message
 from bot.handlers.callbacks import handle_callback
 
+# Импорт wave sender
+from bot.wave_sender import start_wave_sender, stop_wave_sender
+
 logger.info(f"Vision Model: {'ENABLED' if VISION_MODEL_ENABLED else 'DISABLED (using stubs)'}")
 
 def main():
@@ -60,6 +63,9 @@ def main():
         return
 
     logger.info("Ожидание сообщений...")
+
+    # Запускаем фоновый поток для отправки волн
+    start_wave_sender()
 
     marker = None
     error_count = 0
@@ -115,6 +121,7 @@ def main():
                     time.sleep(5)
 
     finally:
+        stop_wave_sender()
         close_db_pool()
         logger.info("Бот остановлен")
 

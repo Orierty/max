@@ -8,7 +8,9 @@ from database import (
     assign_volunteer_to_request, complete_request,
     get_all_users_by_role, get_volunteer_stats,
     create_review, add_tags_to_user,
-    get_volunteer_info, create_complaint, log_action
+    get_volunteer_info, create_complaint, log_action,
+    get_available_volunteers_for_wave, update_request_wave,
+    volunteer_has_active_request
 )
 from bot.utils import send_message, send_message_with_keyboard, create_user_mention
 
@@ -25,21 +27,31 @@ def handle_request_call(chat_id, username, user_id=None, message_id=None):
     if user and user.get("tags"):
         tags_text = f"\nТеги: {', '.join(user['tags'])}"
 
-    # Получаем всех волонтёров из PostgreSQL
-    volunteers = get_all_users_by_role("volunteer")
+    # Получаем 15 случайных доступных волонтёров для первой волны
+    volunteers = get_available_volunteers_for_wave(exclude_volunteer_ids=None, limit=15)
 
-    # Отправляем запрос всем волонтёрам
+    if not volunteers:
+        send_message(chat_id, "⚠️ К сожалению, сейчас нет доступных волонтёров. Попробуйте позже.")
+        return
+
+    # Отправляем запрос выбранным волонтёрам
     volunteers_notified = 0
-    for user_chat_id, user_data in volunteers.items():
-        buttons = [
-            [{"type": "callback", "text": "✅ Принять запрос", "payload": f"accept_request_{request_id}"}]
-        ]
-        send_message_with_keyboard(
-            user_chat_id,
-            f"🆘 Новый запрос на звонок!\n\nОт: @{username or 'неизвестно'}\nВремя: {datetime.now().strftime('%H:%M')}{tags_text}",
-            buttons
-        )
-        volunteers_notified += 1
+    for volunteer_id in volunteers:
+        try:
+            buttons = [
+                [{"type": "callback", "text": "✅ Принять запрос", "payload": f"accept_request_{request_id}"}]
+            ]
+            send_message_with_keyboard(
+                volunteer_id,
+                f"🆘 Новый запрос на звонок!\n\nОт: @{username or 'неизвестно'}\nВремя: {datetime.now().strftime('%H:%M')}{tags_text}",
+                buttons
+            )
+            volunteers_notified += 1
+        except Exception as e:
+            logger.error(f"Ошибка отправки уведомления волонтёру {volunteer_id}: {e}")
+
+    # Обновляем информацию о волне
+    update_request_wave(request_id, volunteers)
 
     if volunteers_notified > 0:
         send_message(chat_id, f"✅ Ваш запрос отправлен {volunteers_notified} волонтёрам. Ожидайте ответа...")
@@ -70,10 +82,20 @@ def handle_accept_request(volunteer_chat_id, request_id, volunteer_username, cal
         )
         return False
 
+    # Проверяем, нет ли у волонтёра уже активной заявки
+    if volunteer_has_active_request(volunteer_chat_id):
+        send_message(
+            volunteer_chat_id,
+            "⚠️ У вас уже есть активная заявка.\n\n"
+            "Завершите текущую заявку прежде чем принимать новую."
+        )
+        return False
+
     # Получаем запрос из PostgreSQL
     request = get_request(request_id)
 
     if not request or request["status"] != "pending":
+        send_message(volunteer_chat_id, "⚠️ Этот запрос уже принят другим волонтёром.")
         return False
 
     # Логируем действие
