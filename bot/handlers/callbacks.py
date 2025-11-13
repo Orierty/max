@@ -1,13 +1,23 @@
 """
 Обработчики callback запросов
 """
+
 import logging
 from database import get_user
 from bot.utils import answer_callback, send_message
-from .menu import handle_role_selection, show_needy_menu, show_volunteer_menu, show_moderator_menu
+from .menu import (
+    handle_role_selection,
+    show_needy_menu,
+    show_volunteer_menu,
+    show_moderator_menu,
+)
 from .requests import (
-    handle_request_call, handle_accept_request, handle_complete_request,
-    handle_add_tag, handle_skip_tags, handle_rate_volunteer, handle_complaint
+    handle_request_call,
+    handle_accept_request,
+    handle_complete_request,
+    handle_add_tag,
+    handle_skip_tags,
+    handle_rate_volunteer,
 )
 from .image import handle_image_to_text_request
 from .sos import handle_sos
@@ -16,7 +26,7 @@ from .verification import (
     handle_verification_request,
     handle_photo_description_request,
     show_photo_requests_for_volunteer,
-    handle_take_photo_request
+    handle_take_photo_request,
 )
 from .moderator import (
     show_verification_requests,
@@ -26,25 +36,26 @@ from .moderator import (
     show_complaints,
     show_complaint_details,
     block_volunteer,
-    dismiss_complaint
+    dismiss_complaint,
 )
 
 logger = logging.getLogger(__name__)
 
+
 def handle_callback(update):
     """Обработка callback query"""
-    callback = update.get('callback', {})
-    message = update.get('message', {})
+    callback = update.get("callback", {})
+    message = update.get("message", {})
 
-    callback_id = callback.get('callback_id')
-    payload = callback.get('payload')
-    user_info = callback.get('user', {})
+    callback_id = callback.get("callback_id")
+    payload = callback.get("payload")
+    user_info = callback.get("user", {})
 
-    chat_id = message.get('recipient', {}).get('chat_id')
-    message_id = message.get('body', {}).get('mid')
+    chat_id = message.get("recipient", {}).get("chat_id")
+    message_id = message.get("body", {}).get("mid")
     # Пробуем получить username или name
-    username = user_info.get('username') or user_info.get('name')
-    user_id = user_info.get('user_id')
+    username = user_info.get("username") or user_info.get("name")
+    user_id = user_info.get("user_id")
 
     if not callback_id or not payload or not chat_id:
         return
@@ -62,6 +73,7 @@ def handle_callback(update):
 
     # Функции нуждающегося
     elif payload == "request_call":
+        print(chat_id, username, user_id, message_id)
         handle_request_call(chat_id, username, user_id, message_id)
         answer_callback(callback_id)
 
@@ -83,7 +95,10 @@ def handle_callback(update):
     # Обработка запросов волонтёров
     elif payload.startswith("accept_request_"):
         request_id = payload.replace("accept_request_", "")
-        success = handle_accept_request(chat_id, request_id, username, callback_id)
+
+        success = handle_accept_request(
+            chat_id, request_id, username, user_id, callback_id
+        )
         if success:
             answer_callback(callback_id)
         else:
