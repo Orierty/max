@@ -12,5 +12,17 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: always
 
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: max_bot_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - '8080:80' # pgAdmin будет доступен на localhost:8080
+    depends_on:
+      - postgres
+    restart: always
+
 volumes:
   postgres_data:

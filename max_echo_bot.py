@@ -1011,8 +1011,10 @@ def main():
                                 chat_id = message.get('recipient', {}).get('chat_id')
                                 message_id = message.get('body', {}).get('mid')  # Получаем ID сообщения
                                 # Пробуем получить username или name
-                                username = user_info.get('username') or user_info.get('name')
-                                user_id = user_info.get('user_id')
+                                username = user_info.get("username") or user_info.get(
+                                    "name"
+                                )
+                                user_id = user_info.get("user_id")
 
                                 if callback_id and payload and chat_id:
                                     handle_callback(callback_id, payload, chat_id, username, user_id, message_id)
