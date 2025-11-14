@@ -5,18 +5,13 @@ psycopg2-binary
 
 # AI библиотеки (раскомментируй если нужны)
 
-# Для Vision Model (распознавание изображений) - если VISION_MODEL_ENABLED=true
-# transformers
-# torch
-# pillow
-# qwen-vl-utils
-# accelerate
-# optimum
+# Для Vision Model (GigaChat Pro) - если VISION_MODEL_ENABLED=true
+gigachat       # API для работы с GigaChat
+pillow         # Конвертация изображений в JPEG
 
 # Для Voice Control (голосовое управление) - если VOICE_ENABLED=true
-# vosk          # Распознавание речи офлайн (не OpenAI!)
-# pydub         # Конвертация аудио форматов
-#
+vosk          # Распознавание речи офлайн
+pydub         # Конвертация аудио форматов
 
 # ВАЖНО! Для работы pydub нужен ffmpeg в системе:
 # Windows: winget install ffmpeg  ИЛИ  choco install ffmpeg
