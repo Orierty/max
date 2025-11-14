@@ -5,11 +5,11 @@ import logging
 import os
 import time
 from bot.utils.voice import transcribe_voice, parse_voice_command, download_voice
-from bot.utils import send_message
+from bot.utils import send_message, send_message_with_menu_button
 from bot.config import DOWNLOADS_DIR
 from .requests import handle_request_call
 from .image import handle_image_to_text_request
-from .sos import handle_sos
+# from .sos import handle_sos  # Закомментировано
 from .menu import show_needy_menu
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ def handle_voice_to_text_request(chat_id):
     # Устанавливаем режим "только текст"
     voice_mode[chat_id] = "text_only"
 
-    send_message(
+    send_message_with_menu_button(
         chat_id,
         "🎤 Отправьте мне голосовое сообщение, и я преобразую его в текст.\n\n"
         "Эта функция только распознаёт речь, но не выполняет команды."
@@ -42,14 +42,14 @@ def handle_voice_to_text_only(chat_id, voice_url):
     """
     try:
         # Уведомляем пользователя
-        send_message(chat_id, "🎤 Распознаю речь...")
+        send_message_with_menu_button(chat_id, "🎤 Распознаю речь...")
 
         # Скачиваем аудио файл
         voice_filename = f"voice_{chat_id}_{int(time.time())}.ogg"
         voice_path = os.path.join(DOWNLOADS_DIR, voice_filename)
 
         if not download_voice(voice_url, voice_path):
-            send_message(chat_id, "❌ Ошибка при скачивании голосового сообщения")
+            send_message_with_menu_button(chat_id, "❌ Ошибка при скачивании голосового сообщения")
             return
 
         # Распознаём речь
@@ -57,10 +57,10 @@ def handle_voice_to_text_only(chat_id, voice_url):
         text = transcribe_voice(voice_path)
 
         if not text:
-            send_message(chat_id, "❌ Не удалось распознать речь. Попробуйте ещё раз.")
+            send_message_with_menu_button(chat_id, "❌ Не удалось распознать речь. Попробуйте ещё раз.")
         else:
             # Отправляем только текст, без команд
-            send_message(chat_id, f"📝 Распознанный текст:\n\n\"{text}\"")
+            send_message_with_menu_button(chat_id, f"📝 Распознанный текст:\n\n\"{text}\"")
 
         # Сбрасываем режим обработки голоса
         if chat_id in voice_mode:
@@ -75,7 +75,7 @@ def handle_voice_to_text_only(chat_id, voice_url):
 
     except Exception as e:
         logger.error(f"Ошибка обработки голосового для текста: {e}", exc_info=True)
-        send_message(chat_id, "❌ Произошла ошибка при обработке голосового сообщения")
+        send_message_with_menu_button(chat_id, "❌ Произошла ошибка при обработке голосового сообщения")
 
 def handle_voice_message(chat_id, voice_url, username, user_id):
     """
@@ -88,14 +88,14 @@ def handle_voice_message(chat_id, voice_url, username, user_id):
     """
     try:
         # Уведомляем пользователя
-        send_message(chat_id, "🎤 Обрабатываю голосовое сообщение...")
+        send_message_with_menu_button(chat_id, "🎤 Обрабатываю голосовое сообщение...")
 
         # Скачиваем аудио файл
         voice_filename = f"voice_{chat_id}_{int(time.time())}.ogg"
         voice_path = os.path.join(DOWNLOADS_DIR, voice_filename)
 
         if not download_voice(voice_url, voice_path):
-            send_message(chat_id, "❌ Ошибка при скачивании голосового сообщения")
+            send_message_with_menu_button(chat_id, "❌ Ошибка при скачивании голосового сообщения")
             return
 
         # Распознаём речь
@@ -103,7 +103,7 @@ def handle_voice_message(chat_id, voice_url, username, user_id):
         text = transcribe_voice(voice_path)
 
         if not text:
-            send_message(chat_id, "❌ Не удалось распознать речь. Попробуйте ещё раз.")
+            send_message_with_menu_button(chat_id, "❌ Не удалось распознать речь. Попробуйте ещё раз.")
             # Удаляем временный файл
             try:
                 os.remove(voice_path)
@@ -112,7 +112,7 @@ def handle_voice_message(chat_id, voice_url, username, user_id):
             return
 
         # Показываем распознанный текст
-        send_message(chat_id, f"📝 Вы сказали:\n\"{text}\"")
+        send_message_with_menu_button(chat_id, f"📝 Вы сказали:\n\"{text}\"")
 
         # Определяем команду
         result = parse_voice_command(text)
@@ -126,13 +126,13 @@ def handle_voice_message(chat_id, voice_url, username, user_id):
             execute_voice_command(chat_id, command, username, user_id, confidence)
         else:
             # Не распознали команду
-            send_message(
+            send_message_with_menu_button(
                 chat_id,
                 "🤔 Не смог распознать команду.\n\n"
                 "Попробуйте сказать:\n"
                 "• \"Позвоните мне волонтёр\"\n"
                 "• \"Покажи меню\"\n"
-                "• \"SOS помогите\"\n"
+                # "• \"SOS помогите\"\n"  # Закомментировано
                 "• \"Опиши картинку\""
             )
 
@@ -145,7 +145,7 @@ def handle_voice_message(chat_id, voice_url, username, user_id):
 
     except Exception as e:
         logger.error(f"Ошибка обработки голосового сообщения: {e}", exc_info=True)
-        send_message(chat_id, f"❌ Произошла ошибка при обработке голосового сообщения")
+        send_message_with_menu_button(chat_id, f"❌ Произошла ошибка при обработке голосового сообщения")
 
 def execute_voice_command(chat_id, command, username, user_id, confidence):
     """
@@ -164,21 +164,21 @@ def execute_voice_command(chat_id, command, username, user_id, confidence):
     confidence_emoji = "✅" if confidence >= 0.7 else "⚠️"
 
     if command == "request_call":
-        send_message(chat_id, f"{confidence_emoji} Запрашиваю звонок от волонтёра...")
+        send_message_with_menu_button(chat_id, f"{confidence_emoji} Запрашиваю звонок от волонтёра...")
         handle_request_call(chat_id, username, user_id, None)
 
     elif command == "image_to_text":
-        send_message(chat_id, f"{confidence_emoji} Активирую распознавание изображений...")
+        send_message_with_menu_button(chat_id, f"{confidence_emoji} Активирую распознавание изображений...")
         handle_image_to_text_request(chat_id)
 
-    elif command == "sos":
-        send_message(chat_id, f"{confidence_emoji} Активирую сигнал SOS...")
-        handle_sos(chat_id, username, user_id)
+    # elif command == "sos":  # Закомментировано
+    #     send_message_with_menu_button(chat_id, f"{confidence_emoji} Активирую сигнал SOS...")
+    #     handle_sos(chat_id, username, user_id)
 
     elif command == "menu":
-        send_message(chat_id, f"{confidence_emoji} Показываю меню...")
+        send_message_with_menu_button(chat_id, f"{confidence_emoji} Показываю меню...")
         show_needy_menu(chat_id)
 
     else:
         logger.warning(f"Неизвестная команда: {command}")
-        send_message(chat_id, "❌ Неизвестная команда")
+        send_message_with_menu_button(chat_id, "❌ Неизвестная команда")

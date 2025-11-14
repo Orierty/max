@@ -27,8 +27,9 @@ DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
 # Max.ru API
 BASE_URL = "https://platform-api.max.ru"
+MAX_API_URL = BASE_URL  # Алиас для совместимости
+# Max.ru использует access_token как query parameter, а не Authorization header
 HEADERS = {
-    "Authorization": MAX_TOKEN,
     "Content-Type": "application/json"
 }
 

@@ -35,7 +35,7 @@ def show_needy_menu(chat_id):
         [{"type": "callback", "text": "🔊 Текст → Голосовое (скоро)", "payload": "text_to_voice"}],
         [{"type": "callback", "text": image_button_text, "payload": "image_to_text"}],
         [{"type": "callback", "text": "👁️ Вызвать волонтера для описания фото", "payload": "request_photo_description"}],
-        [{"type": "callback", "text": "🆘 SOS", "payload": "sos"}]
+        # [{"type": "callback", "text": "🆘 SOS", "payload": "sos"}]  # Закомментировано
     ]
 
     menu_text = "Выберите функцию:"
@@ -92,8 +92,7 @@ def show_volunteer_menu(chat_id):
     # Inline кнопки
     inline_buttons = [
         [{"type": "callback", "text": "📊 Моя статистика", "payload": "my_stats"}],
-        [{"type": "callback", "text": "📋 Активные запросы", "payload": "active_requests"}],
-        [{"type": "callback", "text": "👁️ Описать фото для нуждающихся", "payload": "volunteer_photo_requests"}]
+        [{"type": "callback", "text": "📋 Активные запросы", "payload": "active_requests"}]
     ]
 
     # Кнопка верификации только для неверифицированных
@@ -135,7 +134,7 @@ def show_moderator_menu(chat_id):
 
 def handle_role_selection(chat_id, role, username, user_id=None, start_message_id=None):
     """Обработка выбора роли пользователем"""
-    save_user(chat_id, role, username)
+    save_user(chat_id, role, username, user_id=user_id)
 
     if role == "volunteer":
         send_message(chat_id, "✅ Вы зарегистрированы как волонтёр!\n\nВы будете получать уведомления о запросах на помощь от нуждающихся.")

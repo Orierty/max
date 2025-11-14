@@ -4,7 +4,7 @@
 import os
 import psycopg2
 from psycopg2 import pool
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, Json
 from datetime import datetime
 import logging
 
@@ -95,29 +95,38 @@ def get_user(user_id):
         if conn:
             release_connection(conn)
 
-def save_user(user_id, role, username=None, **kwargs):
-    """Сохраняет или обновляет пользователя"""
+def save_user(chat_id, role, username=None, user_id=None, **kwargs):
+    """Сохраняет или обновляет пользователя
+
+    Args:
+        chat_id: ID чата (строка)
+        role: Роль пользователя
+        username: Имя пользователя
+        user_id: Числовой ID пользователя в Max.ru (опционально)
+    """
     conn = None
     try:
         conn = get_connection()
         with conn.cursor() as cur:
             # Проверяем существует ли пользователь
-            cur.execute("SELECT id FROM users WHERE id = %s", (str(user_id),))
+            cur.execute("SELECT id FROM users WHERE id = %s", (str(chat_id),))
             exists = cur.fetchone()
 
             if exists:
                 # Обновляем существующего
                 cur.execute("""
                     UPDATE users
-                    SET name = COALESCE(%s, name), role = %s
+                    SET name = COALESCE(%s, name),
+                        role = %s,
+                        user_id = COALESCE(%s, user_id)
                     WHERE id = %s
-                """, (username or "Аноним", role, str(user_id)))
+                """, (username or "Аноним", role, user_id, str(chat_id)))
             else:
                 # Создаём нового
                 cur.execute("""
-                    INSERT INTO users (id, name, role, link, city, tags)
-                    VALUES (%s, %s, %s, NULL, NULL, ARRAY[]::TEXT[])
-                """, (str(user_id), username or "Аноним", role))
+                    INSERT INTO users (id, name, role, user_id, link, city, tags)
+                    VALUES (%s, %s, %s, %s, NULL, NULL, ARRAY[]::TEXT[])
+                """, (str(chat_id), username or "Аноним", role, user_id))
 
             # Если это волонтёр, создаём запись в volunteers
             if role == "volunteer":
@@ -125,14 +134,14 @@ def save_user(user_id, role, username=None, **kwargs):
                     INSERT INTO volunteers (user_id, rating, call_count)
                     VALUES (%s, 0, 0)
                     ON CONFLICT (user_id) DO NOTHING
-                """, (str(user_id),))
+                """, (str(chat_id),))
 
             conn.commit()
-            logger.debug(f"Пользователь {user_id} сохранён")
+            logger.debug(f"Пользователь {chat_id} сохранён")
             return True
 
     except Exception as e:
-        logger.error(f"Ошибка сохранения пользователя {user_id}: {e}")
+        logger.error(f"Ошибка сохранения пользователя {chat_id}: {e}")
         if conn:
             conn.rollback()
         return False
@@ -219,6 +228,47 @@ def complete_request(request_id):
         if conn:
             release_connection(conn)
 
+def cancel_request(request_id, cancelled_by_needy=True):
+    """Отменяет запрос (может быть отменён нуждающимся)"""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            # Проверяем, что запрос ещё не принят волонтёром
+            cur.execute("SELECT status FROM requests WHERE id = %s", (str(request_id),))
+            result = cur.fetchone()
+
+            if not result:
+                return False, "Запрос не найден"
+
+            status = result[0]
+
+            if status == 'active':
+                return False, "Запрос уже принят волонтёром, отменить нельзя"
+
+            if status in ('completed', 'cancelled'):
+                return False, "Запрос уже завершён"
+
+            # Отменяем запрос
+            cur.execute("""
+                UPDATE requests
+                SET status = 'cancelled'
+                WHERE id = %s
+            """, (str(request_id),))
+
+            conn.commit()
+            logger.info(f"Запрос {request_id} отменён {'нуждающимся' if cancelled_by_needy else 'системой'}")
+            return True, "Запрос отменён"
+
+    except Exception as e:
+        logger.error(f"Ошибка отмены запроса: {e}")
+        if conn:
+            conn.rollback()
+        return False, f"Ошибка: {str(e)}"
+    finally:
+        if conn:
+            release_connection(conn)
+
 def get_request(request_id):
     """Получает данные запроса"""
     conn = None
@@ -251,6 +301,27 @@ def get_active_requests():
     except Exception as e:
         logger.error(f"Ошибка получения активных запросов: {e}")
         return {}
+    finally:
+        if conn:
+            release_connection(conn)
+
+def get_active_request_for_user(chat_id):
+    """Получает активную заявку нуждающегося (если есть)"""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT * FROM requests
+                WHERE needy_id = %s AND status IN ('pending', 'active')
+                ORDER BY created_time DESC
+                LIMIT 1
+            """, (str(chat_id),))
+            request = cur.fetchone()
+            return dict(request) if request else None
+    except Exception as e:
+        logger.error(f"Ошибка получения активной заявки для пользователя {chat_id}: {e}")
+        return None
     finally:
         if conn:
             release_connection(conn)
@@ -782,10 +853,13 @@ def log_action(user_id, action, target_type=None, target_id=None, details=None, 
     try:
         conn = get_connection()
         with conn.cursor() as cur:
+            # Конвертируем dict в JSONB если передан details
+            details_json = Json(details) if details is not None else None
+
             cur.execute("""
                 INSERT INTO audit_log (user_id, action, target_type, target_id, details, ip_address)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (str(user_id), action, target_type, str(target_id) if target_id else None, details, ip_address))
+            """, (str(user_id), action, target_type, str(target_id) if target_id else None, details_json, ip_address))
 
             conn.commit()
             logger.debug(f"Действие {action} пользователя {user_id} записано в журнал")
@@ -929,6 +1003,145 @@ def volunteer_has_active_request(volunteer_id):
     except Exception as e:
         logger.error(f"Ошибка проверки активных заявок волонтёра: {e}")
         return False
+    finally:
+        if conn:
+            release_connection(conn)
+
+# === Функции для волновой системы описания фото ===
+
+def get_available_volunteers_for_photo_wave(exclude_volunteer_ids=None, limit=15):
+    """Получает список доступных волонтёров для отправки запроса на описание фото"""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Исключаем волонтёров которым уже отправили
+            exclude_clause = ""
+            if exclude_volunteer_ids:
+                exclude_clause = f"AND v.user_id NOT IN ({','.join(['%s'] * len(exclude_volunteer_ids))})"
+
+            query = f"""
+                SELECT v.user_id
+                FROM volunteers v
+                WHERE v.verification_status IN ('verified', 'trusted', 'unverified')
+                AND v.is_blocked = FALSE
+                {exclude_clause}
+                ORDER BY RANDOM()
+                LIMIT %s
+            """
+
+            params = list(exclude_volunteer_ids) if exclude_volunteer_ids else []
+            params.append(limit)
+
+            cur.execute(query, params)
+            volunteers = cur.fetchall()
+            return [v['user_id'] for v in volunteers]
+    except Exception as e:
+        logger.error(f"Ошибка получения доступных волонтёров для фото: {e}")
+        return []
+    finally:
+        if conn:
+            release_connection(conn)
+
+def update_photo_request_wave(request_id, notified_volunteers):
+    """Обновляет информацию о волне уведомлений для запроса на описание фото"""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE photo_description_requests
+                SET
+                    current_wave = current_wave + 1,
+                    notified_volunteers = COALESCE(notified_volunteers, ARRAY[]::TEXT[]) || %s,
+                    last_wave_sent_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """, (notified_volunteers, request_id))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Ошибка обновления волны запроса на фото: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            release_connection(conn)
+
+def get_photo_request_notified_volunteers(request_id):
+    """Получает список волонтёров, которым уже отправили уведомление о запросе фото"""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT notified_volunteers, failed_volunteers, current_wave, last_wave_sent_at
+                FROM photo_description_requests
+                WHERE id = %s
+            """, (request_id,))
+            result = cur.fetchone()
+            if result:
+                return {
+                    'notified_volunteers': result['notified_volunteers'] or [],
+                    'failed_volunteers': result['failed_volunteers'] or [],
+                    'current_wave': result['current_wave'] or 0,
+                    'last_wave_sent_at': result['last_wave_sent_at']
+                }
+            return None
+    except Exception as e:
+        logger.error(f"Ошибка получения уведомлённых волонтёров для фото: {e}")
+        return None
+    finally:
+        if conn:
+            release_connection(conn)
+
+def mark_photo_description_failed(request_id, volunteer_id):
+    """Отмечает, что описание от волонтёра не помогло"""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            # Добавляем волонтёра в список неудачных
+            cur.execute("""
+                UPDATE photo_description_requests
+                SET
+                    failed_volunteers = COALESCE(failed_volunteers, ARRAY[]::TEXT[]) || %s,
+                    status = 'pending',
+                    assigned_volunteer_id = NULL
+                WHERE id = %s
+            """, ([str(volunteer_id)], request_id))
+            conn.commit()
+            logger.info(f"Волонтёр {volunteer_id} отмечен как неудачный для запроса фото {request_id}")
+            return True
+    except Exception as e:
+        logger.error(f"Ошибка при отметке неудачного описания: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            release_connection(conn)
+
+def increment_photo_response_count(request_id):
+    """Увеличивает счётчик полученных описаний"""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE photo_description_requests
+                SET response_count = response_count + 1
+                WHERE id = %s
+                RETURNING response_count
+            """, (request_id,))
+            count = cur.fetchone()[0]
+            conn.commit()
+            return count
+    except Exception as e:
+        logger.error(f"Ошибка увеличения счётчика описаний: {e}")
+        if conn:
+            conn.rollback()
+        return None
     finally:
         if conn:
             release_connection(conn)

@@ -5,7 +5,7 @@ import logging
 import time
 from datetime import datetime
 from database import get_all_users_by_role, create_request
-from bot.utils import send_message, send_message_with_keyboard, send_location, create_user_mention
+from bot.utils import send_message, send_message_with_keyboard, send_location, create_user_mention, send_message_with_keyboard_and_menu
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,11 @@ def handle_sos(chat_id, username, user_id=None):
     # Сохраняем в памяти (временно)
     sos_requests[str(chat_id)] = sos_request
 
-    # Отправляем кнопку запроса геолокации
+    # Отправляем кнопку запроса геолокации с кнопкой меню
     buttons = [
         [{"type": "request_geo_location", "text": "📍 Поделиться местоположением", "quick": False}]
     ]
-    send_message_with_keyboard(
+    send_message_with_keyboard_and_menu(
         chat_id,
         "🆘 Сигнал SOS активирован!\n\n⚠️ Пожалуйста, поделитесь вашим местоположением, чтобы волонтёры могли вам помочь.",
         buttons
@@ -46,7 +46,8 @@ def handle_sos_location(chat_id, username, user_id, location):
     sos_request = sos_requests.get(str(chat_id))
 
     if not sos_request or sos_request.get("status") != "sos_pending_location":
-        send_message(chat_id, "⚠️ Активный SOS запрос не найден. Нажмите кнопку SOS снова.")
+        from bot.utils import send_message_with_menu_button
+        send_message_with_menu_button(chat_id, "⚠️ Активный SOS запрос не найден. Нажмите кнопку SOS снова.")
         return
 
     # Обновляем статус и сохраняем геолокацию
@@ -78,4 +79,5 @@ def handle_sos_location(chat_id, username, user_id, location):
     sos_request["status"] = "completed"
     sos_request["completed_at"] = datetime.now().isoformat()
 
-    send_message(chat_id, f"✅ Сигнал SOS с вашим местоположением отправлен {volunteers_notified} волонтёрам!")
+    from bot.utils import send_message_with_menu_button
+    send_message_with_menu_button(chat_id, f"✅ Сигнал SOS с вашим местоположением отправлен {volunteers_notified} волонтёрам!")

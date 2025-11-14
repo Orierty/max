@@ -23,6 +23,10 @@ from .voice import (
     parse_voice_command,
     download_voice
 )
+from .messaging import (
+    send_message_with_menu_button,
+    send_message_with_keyboard_and_menu
+)
 
 __all__ = [
     'get_updates',
@@ -40,5 +44,7 @@ __all__ = [
     'download_image',
     'transcribe_voice',
     'parse_voice_command',
-    'download_voice'
+    'download_voice',
+    'send_message_with_menu_button',
+    'send_message_with_keyboard_and_menu'
 ]

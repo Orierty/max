@@ -10,19 +10,46 @@ from database import (
     create_review, add_tags_to_user,
     get_volunteer_info, create_complaint, log_action,
     get_available_volunteers_for_wave, update_request_wave,
-    volunteer_has_active_request
+    volunteer_has_active_request, get_connection, release_connection,
+    get_active_request_for_user
 )
-from bot.utils import send_message, send_message_with_keyboard, create_user_mention
+from bot.utils import send_message, send_message_with_keyboard, create_user_mention, send_message_with_keyboard_and_menu
+from bot.chat_room_manager import assign_chat_room_to_request, release_chat_room
 
 logger = logging.getLogger(__name__)
 
 def handle_request_call(chat_id, username, user_id=None, message_id=None):
     """Обработка запроса на звонок от волонтёра"""
+    # Проверяем, зарегистрирован ли пользователь
+    user = get_user(chat_id)
+    if not user:
+        # Регистрируем пользователя как needy
+        from database import save_user
+        save_user(chat_id, "needy", username, user_id=user_id)
+        user = get_user(chat_id)
+
+    # Проверяем, нет ли уже активной заявки
+    active_request = get_active_request_for_user(chat_id)
+    if active_request:
+        buttons = [
+            [{"type": "callback", "text": "❌ Отменить заявку", "payload": f"cancel_request_{active_request['id']}"}]
+        ]
+        send_message_with_keyboard_and_menu(
+            chat_id,
+            f"⚠️ У вас уже есть активная заявка #{active_request['id']}.\n\n"
+            "Дождитесь ответа волонтёра или отмените её.",
+            buttons
+        )
+        return
+
     # Создаём запрос в PostgreSQL
     request_id = create_request(chat_id, urgency="normal")
 
+    if not request_id:
+        send_message(chat_id, "❌ Не удалось создать запрос. Попробуйте позже.")
+        return
+
     # Получаем теги пользователя для отображения волонтёрам
-    user = get_user(chat_id)
     tags_text = ""
     if user and user.get("tags"):
         tags_text = f"\nТеги: {', '.join(user['tags'])}"
@@ -53,10 +80,21 @@ def handle_request_call(chat_id, username, user_id=None, message_id=None):
     # Обновляем информацию о волне
     update_request_wave(request_id, volunteers)
 
+    # Добавляем кнопку "Назад в меню"
+    menu_button = [[{"type": "callback", "text": "🔙 Назад в меню", "payload": "menu"}]]
+
     if volunteers_notified > 0:
-        send_message(chat_id, f"✅ Ваш запрос отправлен {volunteers_notified} волонтёрам. Ожидайте ответа...")
+        send_message_with_keyboard(
+            chat_id,
+            f"✅ Ваш запрос отправлен {volunteers_notified} волонтёрам. Ожидайте ответа...",
+            menu_button
+        )
     else:
-        send_message(chat_id, "⚠️ К сожалению, сейчас нет доступных волонтёров. Попробуйте позже.")
+        send_message_with_keyboard(
+            chat_id,
+            "⚠️ К сожалению, сейчас нет доступных волонтёров. Попробуйте позже.",
+            menu_button
+        )
 
 def handle_accept_request(volunteer_chat_id, request_id, volunteer_username, callback_id=None):
     """Обработка принятия запроса волонтёром"""
@@ -104,6 +142,70 @@ def handle_accept_request(volunteer_chat_id, request_id, volunteer_username, cal
     # Обновляем статус запроса в PostgreSQL
     assign_volunteer_to_request(request_id, volunteer_chat_id)
 
+    # Получаем user_id нуждающегося и волонтёра (числовые ID)
+    needy_chat_id = request.get("user_id")
+    logger.info(f"Needy chat_id: {needy_chat_id}")
+
+    needy = get_user(needy_chat_id)
+    logger.info(f"Needy user data: {needy}")
+    needy_user_id = needy.get("user_id") if needy else None
+
+    logger.info(f"Volunteer chat_id: {volunteer_chat_id}")
+    volunteer = get_user(volunteer_chat_id)
+    logger.info(f"Volunteer user data: {volunteer}")
+    volunteer_user_id = volunteer.get("user_id") if volunteer else None
+
+    logger.info(f"Final IDs - needy_user_id: {needy_user_id}, volunteer_user_id: {volunteer_user_id}")
+
+    # Проверяем, что у обоих пользователей есть user_id
+    if not needy_user_id or not volunteer_user_id:
+        logger.error(f"Отсутствует user_id: needy={needy_user_id}, volunteer={volunteer_user_id}")
+        send_message(volunteer_chat_id, "⚠️ Ошибка: не удалось получить ID пользователей. Попробуйте позже.")
+        return False
+
+    # Назначаем групповой чат для общения
+    conn = get_connection()
+    if conn:
+        try:
+            chat_result = assign_chat_room_to_request(
+                conn,
+                request_id,
+                needy_user_id,
+                volunteer_user_id
+            )
+
+            if chat_result and chat_result['success']:
+                logger.info(f"Участники добавлены в групповой чат {chat_result['chat_id']}")
+            else:
+                logger.error(f"Не удалось назначить групповой чат для заявки {request_id}")
+
+                # Отправляем сообщения обоим пользователям о проблеме
+                send_message(volunteer_chat_id,
+                    "⚠️ Не удалось создать групповой чат.\n\n"
+                    "Возможные причины:\n"
+                    "• У нуждающегося настройки приватности запрещают добавление в группы\n"
+                    "• Технические проблемы\n\n"
+                    "Пожалуйста, свяжитесь с нуждающимся напрямую или обратитесь к администратору."
+                )
+
+                send_message(needy_chat_id,
+                    "⚠️ Волонтёр принял ваш запрос, но не удалось создать групповой чат.\n\n"
+                    "Пожалуйста, проверьте настройки приватности в Max.ru:\n"
+                    "Настройки → Приватность → Групповые чаты → Разрешить добавление\n\n"
+                    "Или попробуйте создать новый запрос позже."
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"Ошибка при назначении чата: {e}")
+            send_message(volunteer_chat_id, "⚠️ Произошла ошибка при создании чата.")
+            return False
+        finally:
+            release_connection(conn)
+    else:
+        logger.error("Не удалось получить подключение к БД")
+        return False
+
     # Уведомляем волонтёра с кнопкой завершения диалога
     buttons = [
         [{"type": "callback", "text": "✅ Завершить диалог", "payload": f"complete_request_{request_id}"}]
@@ -117,41 +219,85 @@ def handle_accept_request(volunteer_chat_id, request_id, volunteer_username, cal
 
     send_message_with_keyboard(
         volunteer_chat_id,
-        f"✅ Вы приняли запрос!{stats_text}\n\nПосле завершения диалога нажмите кнопку ниже.",
+        f"✅ Вы приняли запрос!{stats_text}\n\nВы добавлены в групповой чат для общения с нуждающимся.\nПосле завершения диалога нажмите кнопку ниже.",
         buttons
     )
 
-    # Уведомляем нуждающегося с mention волонтёра
-    volunteer = get_user(volunteer_chat_id)
-    volunteer_user_id = volunteer.get("id") if volunteer else None
-
-    # Получаем user_id нуждающегося
-    needy_user_id = request.get("user_id")
-
+    # Уведомляем нуждающегося с mention волонтёра и кнопкой завершения
     text, markup = create_user_mention(
-        "✅ Волонтёр {mention} принял ваш запрос и скоро свяжется с вами!",
+        "✅ Волонтёр {mention} принял ваш запрос!\n\nВы добавлены в групповой чат для общения.\nПосле завершения диалога нажмите кнопку ниже.",
         username=volunteer_username,
         user_id=volunteer_user_id
     )
-    send_message(needy_user_id, text, markup=markup)
+
+    # Добавляем кнопку завершения для нуждающегося
+    needy_buttons = [
+        [{"type": "callback", "text": "✅ Завершить диалог", "payload": f"complete_request_{request_id}"}]
+    ]
+    send_message_with_keyboard(needy_chat_id, text, needy_buttons, markup=markup)
 
     return True
 
-def handle_complete_request(volunteer_chat_id, request_id):
-    """Обработка завершения диалога волонтёром"""
+def handle_complete_request(chat_id, request_id):
+    """Обработка завершения диалога (может быть вызвано волонтёром или нуждающимся)"""
+    # Получаем информацию о запросе ДО завершения
+    request = get_request(request_id)
+    if not request:
+        send_message(chat_id, "❌ Запрос не найден")
+        return
+
+    needy_chat_id = request.get("user_id")
+    volunteer_chat_id_req = request.get("assigned_volunteer_id")
+    chat_room_id = request.get("chat_room_id")
+
+    if not needy_chat_id or not volunteer_chat_id_req:
+        send_message(chat_id, "❌ Не удалось найти пользователей")
+        return
+
+    # Проверяем, кто закрывает заявку
+    is_volunteer = (str(chat_id) == str(volunteer_chat_id_req))
+    is_needy = (str(chat_id) == str(needy_chat_id))
+
+    if not is_volunteer and not is_needy:
+        send_message(chat_id, "❌ Вы не участвуете в этой заявке")
+        return
+
+    # Получаем числовые user_id для удаления из чата
+    needy = get_user(needy_chat_id)
+    volunteer = get_user(volunteer_chat_id_req)
+
+    needy_user_id = needy.get("user_id") if needy else None
+    volunteer_user_id = volunteer.get("user_id") if volunteer else None
+
+    # Освобождаем чат, если был назначен
+    if chat_room_id and needy_user_id and volunteer_user_id:
+        conn = get_connection()
+        try:
+            # Получаем информацию о чате
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT chat_id FROM chat_rooms WHERE id = %s
+                """, (chat_room_id,))
+                result = cur.fetchone()
+
+                if result:
+                    chat_id = result[0]
+                    # Освобождаем чат (удаляем участников и помечаем как свободный)
+                    user_ids = [needy_user_id, volunteer_user_id]
+                    from bot.chat_room_manager import release_chat_room
+                    release_chat_room(conn, chat_room_id, chat_id, user_ids)
+                    logger.info(f"Чат {chat_id} освобождён для заявки {request_id}")
+        except Exception as e:
+            logger.error(f"Ошибка при освобождении чата: {e}")
+        finally:
+            release_connection(conn)
+
     # Завершаем запрос
     complete_request(request_id)
 
-    # Получаем информацию о запросе
-    request = get_request(request_id)
-    if not request:
-        send_message(volunteer_chat_id, "❌ Запрос не найден")
-        return
-
-    needy_user_id = request.get("user_id")
-    if not needy_user_id:
-        send_message(volunteer_chat_id, "❌ Не удалось найти пользователя")
-        return
+    # Логируем действие
+    log_action(chat_id, "complete_request", "request", request_id,
+               details={"completed_by": "volunteer" if is_volunteer else "needy"})
 
     # Предлагаем волонтёру добавить теги о нуждающемся
     buttons = [
@@ -164,7 +310,7 @@ def handle_complete_request(volunteer_chat_id, request_id):
     ]
 
     send_message_with_keyboard(
-        volunteer_chat_id,
+        volunteer_chat_id_req,
         "✅ Диалог завершён!\n\nЕсли хотите, добавьте теги о пользователе (это поможет другим волонтёрам):",
         buttons
     )
@@ -183,7 +329,7 @@ def handle_complete_request(volunteer_chat_id, request_id):
     ]
 
     send_message_with_keyboard(
-        needy_user_id,
+        needy_chat_id,
         "✅ Диалог с волонтёром завершён!\n\nПожалуйста, оцените работу волонтёра:",
         buttons_rating
     )
@@ -350,3 +496,33 @@ def handle_complaint_reason(needy_chat_id, reason):
         del complaint_states[needy_chat_id]
 
     return True
+
+def handle_cancel_request(chat_id, request_id):
+    """Обработка отмены заявки нуждающимся"""
+    from database import cancel_request
+    from bot.utils import send_message_with_menu_button
+
+    # Проверяем, что заявка принадлежит этому пользователю
+    request = get_request(request_id)
+    if not request:
+        send_message_with_menu_button(chat_id, "❌ Заявка не найдена")
+        return
+
+    if request['needy_id'] != str(chat_id):
+        send_message_with_menu_button(chat_id, "❌ Это не ваша заявка")
+        return
+
+    # Отменяем заявку
+    success, message = cancel_request(request_id, cancelled_by_needy=True)
+
+    if success:
+        # Логируем действие
+        log_action(chat_id, "cancel_request", "request", request_id)
+
+        send_message_with_menu_button(
+            chat_id,
+            f"✅ Заявка #{request_id} отменена.\n\n"
+            "Вы можете создать новую заявку в любое время."
+        )
+    else:
+        send_message_with_menu_button(chat_id, f"❌ {message}")

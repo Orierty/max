@@ -4,19 +4,22 @@
 import logging
 from database import get_user
 from bot.utils import answer_callback, send_message
+from bot.utils.debounce import is_action_allowed
 from .menu import handle_role_selection, show_needy_menu, show_volunteer_menu, show_moderator_menu
 from .requests import (
     handle_request_call, handle_accept_request, handle_complete_request,
     handle_add_tag, handle_skip_tags, handle_rate_volunteer, handle_complaint
 )
 from .image import handle_image_to_text_request
-from .sos import handle_sos
+# from .sos import handle_sos  # Закомментировано
 from .voice import handle_voice_to_text_request
 from .verification import (
     handle_verification_request,
     handle_photo_description_request,
     show_photo_requests_for_volunteer,
-    handle_take_photo_request
+    handle_take_photo_request,
+    handle_photo_helpful,
+    handle_photo_not_helpful
 )
 from .moderator import (
     show_verification_requests,
@@ -28,6 +31,7 @@ from .moderator import (
     block_volunteer,
     dismiss_complaint
 )
+from .volunteer import show_volunteer_stats, show_active_requests_list
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +44,9 @@ def handle_callback(update):
     payload = callback.get('payload')
     user_info = callback.get('user', {})
 
-    chat_id = message.get('recipient', {}).get('chat_id')
+    recipient = message.get('recipient', {})
+    chat_id = recipient.get('chat_id')
+    chat_type = recipient.get('chat_type')
     message_id = message.get('body', {}).get('mid')
     # Пробуем получить username или name
     username = user_info.get('username') or user_info.get('name')
@@ -49,7 +55,28 @@ def handle_callback(update):
     if not callback_id or not payload or not chat_id:
         return
 
+    # Игнорируем callback'и из групповых чатов
+    # Бот работает только в личных диалогах
+    if chat_type == "chat":
+        logger.debug(f"Игнорируем callback из группового чата {chat_id}")
+        return
+
     logger.info(f"Callback от {username}: {payload}")
+
+    # Проверяем debounce для критичных действий
+    critical_actions = [
+        "request_call", "image_to_text", "voice_to_text",  # "sos" закомментировано
+        "request_verification", "request_photo_description"
+    ]
+
+    # Также проверяем действия, начинающиеся с определённых префиксов
+    critical_prefixes = ["accept_request_", "complete_request_", "cancel_request_", "take_photo_", "photo_helpful_", "photo_not_helpful_"]
+
+    is_critical = payload in critical_actions or any(payload.startswith(prefix) for prefix in critical_prefixes)
+
+    if is_critical and not is_action_allowed(chat_id, payload):
+        answer_callback(callback_id, "⏳ Подождите немного перед повторным действием")
+        return
 
     # Выбор роли
     if payload == "role_volunteer":
@@ -58,6 +85,21 @@ def handle_callback(update):
 
     elif payload == "role_needy":
         handle_role_selection(chat_id, "needy", username, user_id, message_id)
+        answer_callback(callback_id)
+
+    # Кнопка "Меню"
+    elif payload == "menu":
+        user = get_user(chat_id)
+        if user:
+            role = user.get("role")
+            if role == "needy":
+                show_needy_menu(chat_id)
+            elif role == "volunteer":
+                show_volunteer_menu(chat_id)
+            elif role == "moderator":
+                show_moderator_menu(chat_id)
+        else:
+            send_message(chat_id, "Используйте /start для регистрации")
         answer_callback(callback_id)
 
     # Функции нуждающегося
@@ -69,9 +111,9 @@ def handle_callback(update):
         handle_image_to_text_request(chat_id)
         answer_callback(callback_id)
 
-    elif payload == "sos":
-        handle_sos(chat_id, username, user_id)
-        answer_callback(callback_id)
+    # elif payload == "sos":  # Закомментировано
+    #     handle_sos(chat_id, username, user_id)
+    #     answer_callback(callback_id)
 
     elif payload == "voice_to_text":
         handle_voice_to_text_request(chat_id)
@@ -92,6 +134,12 @@ def handle_callback(update):
     elif payload.startswith("complete_request_"):
         request_id = payload.replace("complete_request_", "")
         handle_complete_request(chat_id, request_id)
+        answer_callback(callback_id)
+
+    elif payload.startswith("cancel_request_"):
+        request_id = int(payload.replace("cancel_request_", ""))
+        from .requests import handle_cancel_request
+        handle_cancel_request(chat_id, request_id)
         answer_callback(callback_id)
 
     elif payload.startswith("add_tag_"):
@@ -117,12 +165,12 @@ def handle_callback(update):
 
     # Функции волонтёра
     elif payload == "my_stats":
-        # TODO: Показать статистику волонтёра
-        answer_callback(callback_id, "Статистика в разработке")
+        show_volunteer_stats(chat_id)
+        answer_callback(callback_id)
 
     elif payload == "active_requests":
-        # TODO: Показать активные запросы
-        answer_callback(callback_id, "Список запросов в разработке")
+        show_active_requests_list(chat_id)
+        answer_callback(callback_id)
 
     # Верификация волонтеров
     elif payload == "request_verification":
@@ -146,6 +194,16 @@ def handle_callback(update):
     elif payload.startswith("view_photo_"):
         request_id = int(payload.replace("view_photo_", ""))
         handle_take_photo_request(chat_id, request_id)
+        answer_callback(callback_id)
+
+    elif payload.startswith("photo_helpful_"):
+        request_id = int(payload.replace("photo_helpful_", ""))
+        handle_photo_helpful(chat_id, request_id)
+        answer_callback(callback_id)
+
+    elif payload.startswith("photo_not_helpful_"):
+        request_id = int(payload.replace("photo_not_helpful_", ""))
+        handle_photo_not_helpful(chat_id, request_id)
         answer_callback(callback_id)
 
     # Жалобы

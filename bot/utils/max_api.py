@@ -3,15 +3,23 @@
 """
 import requests
 import logging
-from bot.config import BASE_URL, HEADERS
+from bot.config import BASE_URL, HEADERS, MAX_TOKEN
 
 logger = logging.getLogger(__name__)
+
+def _add_token(params=None):
+    """Добавляет access_token в query параметры"""
+    if params is None:
+        params = {}
+    params['access_token'] = MAX_TOKEN
+    return params
 
 def get_updates(marker=None):
     """Получает новые обновления через long polling"""
     params = {}
     if marker is not None:
         params['marker'] = marker
+    params = _add_token(params)
 
     response = requests.get(f"{BASE_URL}/updates", headers=HEADERS, params=params)
 
@@ -25,7 +33,7 @@ def get_updates(marker=None):
 
 def send_message(chat_id, text, attachments=None, markup=None):
     """Отправляет сообщение в чат с optional inline клавиатурой и markup"""
-    params = {"chat_id": chat_id}
+    params = _add_token({"chat_id": chat_id})
 
     data = {"text": text}
 
@@ -56,7 +64,7 @@ def send_message_with_reply_keyboard(chat_id, text, buttons):
     Returns:
         Response от API или None в случае ошибки
     """
-    params = {"chat_id": chat_id}
+    params = _add_token({"chat_id": chat_id})
 
     # Формируем кнопки reply keyboard
     formatted_buttons = []
@@ -107,7 +115,7 @@ def send_message_with_keyboard(chat_id, text, buttons, markup=None):
 
 def answer_callback(callback_id, text=None):
     """Отвечает на callback query"""
-    params = {"callback_id": callback_id}
+    params = _add_token({"callback_id": callback_id})
 
     data = {}
     # notification должен быть строкой, а не объектом
@@ -128,7 +136,7 @@ def answer_callback(callback_id, text=None):
 
 def send_location(chat_id, latitude, longitude):
     """Отправляет геолокацию в чат"""
-    params = {"chat_id": chat_id}
+    params = _add_token({"chat_id": chat_id})
 
     data = {
         "text": "",
@@ -153,7 +161,8 @@ def send_location(chat_id, latitude, longitude):
 
 def get_bot_info():
     """Получает информацию о боте"""
-    response = requests.get(f"{BASE_URL}/me", headers=HEADERS)
+    params = _add_token()
+    response = requests.get(f"{BASE_URL}/me", headers=HEADERS, params=params)
 
     if response.status_code == 200:
         return response.json()
@@ -174,7 +183,7 @@ def get_bot_link(start_payload=None):
 
 def forward_message(chat_id, message_id, text=None):
     """Пересылает сообщение в чат"""
-    params = {"chat_id": chat_id}
+    params = _add_token({"chat_id": chat_id})
 
     data = {
         "text": text,

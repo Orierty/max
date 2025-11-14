@@ -6,7 +6,7 @@ from database import get_user, save_user
 from bot.utils import send_message
 from .menu import show_role_selection, show_needy_menu, show_volunteer_menu, show_moderator_menu
 from .image import handle_image_processing
-from .sos import handle_sos_location
+# from .sos import handle_sos_location  # Закомментировано
 from .voice import handle_voice_message, handle_voice_to_text_only, voice_mode
 from .verification import (
     verification_states, photo_description_states,
@@ -57,6 +57,7 @@ def handle_message(update):
     sender = message.get('sender', {})
 
     chat_id = recipient.get('chat_id')
+    chat_type = recipient.get('chat_type')
     text = body.get('text', '')
     message_id = body.get('mid')
     # Пробуем получить username или name
@@ -64,6 +65,12 @@ def handle_message(update):
     user_id = sender.get('user_id')
 
     if not chat_id:
+        return
+
+    # Игнорируем сообщения из групповых чатов
+    # Бот работает только в личных диалогах (chat_type будет "chat" для групп)
+    if chat_type == "chat":
+        logger.debug(f"Игнорируем сообщение из группового чата {chat_id}")
         return
 
     # Проверяем наличие вложений (геолокация, изображения, голосовые и т.д.)
@@ -88,11 +95,11 @@ def handle_message(update):
             voice_url = attachment.get('payload', {}).get('url')
             break
 
-    # Обрабатываем геолокацию для SOS
-    if location:
-        logger.info(f"Получена геолокация из чата {chat_id}: {location['latitude']}, {location['longitude']}")
-        handle_sos_location(chat_id, username, user_id, location)
-        return
+    # Обрабатываем геолокацию для SOS (закомментировано)
+    # if location:
+    #     logger.info(f"Получена геолокация из чата {chat_id}: {location['latitude']}, {location['longitude']}")
+    #     handle_sos_location(chat_id, username, user_id, location)
+    #     return
 
     # Обрабатываем изображения
     if image_url:

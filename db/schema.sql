@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS requests (
     assigned_volunteer_id VARCHAR(100) REFERENCES users(id) ON DELETE SET NULL,
     current_wave INTEGER DEFAULT 0,
     notified_volunteers TEXT[],
-    last_wave_sent_at TIMESTAMP
+    last_wave_sent_at TIMESTAMP,
+    chat_room_id INTEGER REFERENCES chat_rooms(id) ON DELETE SET NULL
 );
 
 -- Таблица отзывов
@@ -106,6 +107,17 @@ CREATE TABLE IF NOT EXISTS audit_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Таблица групповых чатов для связи волонтёров и нуждающихся
+CREATE TABLE IF NOT EXISTS chat_rooms (
+    id SERIAL PRIMARY KEY,
+    chat_id BIGINT UNIQUE NOT NULL,
+    chat_title VARCHAR(200),
+    is_occupied BOOLEAN DEFAULT FALSE,
+    current_request_id VARCHAR(100) REFERENCES requests(id) ON DELETE SET NULL,
+    occupied_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Индексы для оптимизации запросов
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
@@ -123,6 +135,9 @@ CREATE INDEX IF NOT EXISTS idx_photo_requests_status ON photo_description_reques
 CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
 CREATE INDEX IF NOT EXISTS idx_reviews_volunteer ON reviews(volunteer_id);
+CREATE INDEX IF NOT EXISTS idx_chat_rooms_occupied ON chat_rooms(is_occupied);
+CREATE INDEX IF NOT EXISTS idx_chat_rooms_request ON chat_rooms(current_request_id);
+CREATE INDEX IF NOT EXISTS idx_requests_chat_room ON requests(chat_room_id);
 
 -- Функция для автоматического обновления времени завершения запроса
 CREATE OR REPLACE FUNCTION update_completion_time()

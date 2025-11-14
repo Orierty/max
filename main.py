@@ -39,6 +39,9 @@ from bot.handlers.callbacks import handle_callback
 # Импорт wave sender
 from bot.wave_sender import start_wave_sender, stop_wave_sender
 
+# Импорт chat pool initializer
+from bot.chat_pool_initializer import sync_chat_pool
+
 logger.info(f"Vision Model: {'ENABLED' if VISION_MODEL_ENABLED else 'DISABLED (using stubs)'}")
 
 def main():
@@ -61,6 +64,9 @@ def main():
         logger.error("Не удалось получить информацию о боте. Проверьте токен.")
         close_db_pool()
         return
+
+    # Синхронизируем пул групповых чатов
+    sync_chat_pool()
 
     logger.info("Ожидание сообщений...")
 

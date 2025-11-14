@@ -2,7 +2,7 @@
 Обработчики для системы верификации и запросов на описание фото
 """
 import logging
-from bot.utils import send_message, send_message_with_keyboard
+from bot.utils import send_message, send_message_with_keyboard, send_message_with_menu_button, send_message_with_keyboard_and_menu
 from database import (
     get_user,
     get_volunteer_info,
@@ -116,10 +116,10 @@ def handle_photo_description_request(chat_id):
 """
 
     photo_description_states[chat_id] = "waiting_for_photo"
-    send_message(chat_id, text)
+    send_message_with_menu_button(chat_id, text)
 
 def handle_photo_for_description(chat_id, attachments):
-    """Обрабатывает отправку фото для описания"""
+    """Обрабатывает отправку фото для описания - использует волновую систему"""
     if chat_id not in photo_description_states:
         return False
 
@@ -135,7 +135,7 @@ def handle_photo_for_description(chat_id, attachments):
                 break
 
     if not photo_url:
-        send_message(chat_id, "❌ Фото не найдено. Отправьте изображение.")
+        send_message_with_menu_button(chat_id, "❌ Фото не найдено. Отправьте изображение.")
         return True
 
     # Создаем запрос
@@ -145,33 +145,45 @@ def handle_photo_for_description(chat_id, attachments):
         # Логируем действие
         log_action(chat_id, "request_photo_description", "photo_request", request_id)
 
-        send_message(
-            chat_id,
-            f"✅ Запрос на описание фото #{request_id} создан!\n\n"
-            "⏳ Ожидайте, пока волонтер возьмет ваш запрос и опишет фото."
-        )
-        del photo_description_states[chat_id]
+        # Отправляем первую волну волонтёрам (15 человек)
+        from database import get_available_volunteers_for_photo_wave, update_photo_request_wave
+        volunteers = get_available_volunteers_for_photo_wave(limit=15)
 
-        # Уведомляем всех волонтеров
-        from database import get_all_users_by_role
-        volunteers = get_all_users_by_role('volunteer')
-
-        notification_text = f"""
-👁️ **Новый запрос на описание фото**
+        if volunteers:
+            notification_text = f"""👁️ Новый запрос на описание фото
 
 Нуждающийся просит описать фото.
 
-Запрос #{request_id}
-"""
+Запрос #{request_id}"""
 
-        for volunteer_id in volunteers:
-            try:
-                buttons = [[{"text": "👁️ Взять запрос", "payload": f"take_photo_{request_id}"}]]
-                send_message_with_keyboard(volunteer_id, notification_text, buttons)
-            except Exception as e:
-                logger.error(f"Ошибка отправки уведомления волонтеру {volunteer_id}: {e}")
+            sent_count = 0
+            for volunteer_id in volunteers:
+                try:
+                    buttons = [[{"type": "callback", "text": "👁️ Взять запрос", "payload": f"take_photo_{request_id}"}]]
+                    send_message_with_keyboard(volunteer_id, notification_text, buttons)
+                    sent_count += 1
+                except Exception as e:
+                    logger.error(f"Ошибка отправки уведомления волонтеру {volunteer_id}: {e}")
+
+            # Обновляем информацию о волне
+            update_photo_request_wave(request_id, volunteers)
+
+            send_message_with_menu_button(
+                chat_id,
+                f"✅ Запрос на описание фото создан!\n\n"
+                f"📤 Отправлено {sent_count} волонтёрам.\n"
+                "⏳ Ожидайте ответа..."
+            )
+        else:
+            send_message_with_menu_button(
+                chat_id,
+                "✅ Запрос создан, но сейчас нет доступных волонтёров.\n\n"
+                "⏳ Ожидайте, скоро волонтёр возьмёт ваш запрос."
+            )
+
+        del photo_description_states[chat_id]
     else:
-        send_message(chat_id, "❌ Ошибка при создании запроса. Попробуйте позже.")
+        send_message_with_menu_button(chat_id, "❌ Ошибка при создании запроса. Попробуйте позже.")
         del photo_description_states[chat_id]
 
     return True
@@ -250,7 +262,7 @@ def handle_take_photo_request(chat_id, request_id):
             photo_description_states[chat_id] = f"describing_{request_id}"
 
             # Уведомляем нуждающегося
-            send_message(
+            send_message_with_menu_button(
                 needy_id,
                 f"👁️ Волонтер взял ваш запрос на описание фото!\n\nОжидайте описание..."
             )
@@ -272,19 +284,35 @@ def handle_photo_description(chat_id, message_text):
 
     # Завершаем запрос
     if complete_photo_request(request_id, message_text):
+        # Увеличиваем счётчик ответов
+        from database import increment_photo_response_count
+        response_count = increment_photo_response_count(request_id)
+
         # Логируем действие
-        log_action(chat_id, "complete_photo_description", "photo_request", request_id)
+        log_action(chat_id, "complete_photo_description", "photo_request", request_id,
+                  details={"response_count": response_count})
 
-        send_message(chat_id, "✅ Спасибо! Описание отправлено нуждающемуся.")
+        send_message(chat_id, f"✅ Спасибо! Описание отправлено нуждающемуся.\n\n📊 Это описание #{response_count} для данного запроса.")
 
-        # Получаем детали запроса и отправляем нуждающемуся
+        # Получаем детали запроса и отправляем нуждающемуся с кнопками оценки
         request = get_photo_request(request_id)
         if request:
             needy_id = request['needy_id']
-            send_message(
+
+            # Кнопки для оценки описания (с кнопкой меню)
+            buttons = [
+                [
+                    {"type": "callback", "text": "✅ Помогло", "payload": f"photo_helpful_{request_id}"},
+                    {"type": "callback", "text": "❌ Не помогло", "payload": f"photo_not_helpful_{request_id}"}
+                ]
+            ]
+
+            send_message_with_keyboard_and_menu(
                 needy_id,
                 f"👁️ **Описание вашего фото:**\n\n{message_text}\n\n"
-                "Спасибо волонтеру за помощь! ❤️"
+                f"📊 Получено описаний: {response_count}\n\n"
+                "Помогло ли вам это описание?",
+                buttons
             )
 
         del photo_description_states[chat_id]
@@ -293,3 +321,122 @@ def handle_photo_description(chat_id, message_text):
         del photo_description_states[chat_id]
 
     return True
+
+def handle_photo_helpful(chat_id, request_id):
+    """Обрабатывает оценку 'Помогло' для описания фото"""
+    from database import get_photo_request
+    request = get_photo_request(request_id)
+
+    if not request or request['needy_id'] != str(chat_id):
+        send_message_with_menu_button(chat_id, "❌ Запрос не найден")
+        return
+
+    # Отмечаем запрос как полностью завершённый
+    from database import get_connection, release_connection
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE photo_description_requests
+                SET status = 'completed'
+                WHERE id = %s
+            """, (request_id,))
+            conn.commit()
+
+        logger.info(f"Описание фото #{request_id} отмечено как помогшее")
+
+        # Логируем действие
+        log_action(chat_id, "photo_helpful", "photo_request", request_id)
+
+        send_message_with_menu_button(
+            chat_id,
+            "✅ Спасибо за оценку!\n\n"
+            "Рады, что волонтёр смог вам помочь! ❤️"
+        )
+
+        # Благодарим волонтёра
+        volunteer_id = request.get('assigned_volunteer_id')
+        if volunteer_id:
+            send_message(
+                volunteer_id,
+                f"🎉 Нуждающийся отметил, что ваше описание фото #{request_id} помогло!\n\n"
+                "Спасибо за помощь! ❤️"
+            )
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке оценки 'Помогло': {e}")
+        send_message_with_menu_button(chat_id, "❌ Произошла ошибка")
+    finally:
+        if conn:
+            release_connection(conn)
+
+def handle_photo_not_helpful(chat_id, request_id):
+    """Обрабатывает оценку 'Не помогло' для описания фото - отправляет следующую волну"""
+    from database import get_photo_request, mark_photo_description_failed, \
+                         get_photo_request_notified_volunteers, get_available_volunteers_for_photo_wave, \
+                         update_photo_request_wave
+
+    request = get_photo_request(request_id)
+
+    if not request or request['needy_id'] != str(chat_id):
+        send_message_with_menu_button(chat_id, "❌ Запрос не найден")
+        return
+
+    volunteer_id = request.get('assigned_volunteer_id')
+
+    # Отмечаем волонтёра как неудачного
+    if volunteer_id:
+        mark_photo_description_failed(request_id, volunteer_id)
+        logger.info(f"Волонтёр {volunteer_id} отмечен как неудачный для запроса #{request_id}")
+
+    # Логируем действие
+    log_action(chat_id, "photo_not_helpful", "photo_request", request_id,
+              details={"failed_volunteer": volunteer_id})
+
+    # Получаем информацию о волнах
+    wave_info = get_photo_request_notified_volunteers(request_id)
+    if not wave_info:
+        send_message_with_menu_button(chat_id, "❌ Ошибка получения информации о запросе")
+        return
+
+    # Исключаем уже уведомлённых и неудачных волонтёров
+    notified = wave_info['notified_volunteers']
+    failed = wave_info['failed_volunteers']
+    exclude_list = list(set(notified + failed))
+
+    # Отправляем следующую волну (15 новых волонтёров)
+    volunteers = get_available_volunteers_for_photo_wave(exclude_volunteer_ids=exclude_list, limit=15)
+
+    if volunteers:
+        notification_text = f"""👁️ Новый запрос на описание фото
+
+Нуждающийся просит описать фото.
+
+Запрос #{request_id}
+Волна #{wave_info['current_wave'] + 1}"""
+
+        sent_count = 0
+        for vol_id in volunteers:
+            try:
+                buttons = [[{"type": "callback", "text": "👁️ Взять запрос", "payload": f"take_photo_{request_id}"}]]
+                send_message_with_keyboard(vol_id, notification_text, buttons)
+                sent_count += 1
+            except Exception as e:
+                logger.error(f"Ошибка отправки уведомления волонтеру {vol_id}: {e}")
+
+        # Обновляем информацию о волне
+        update_photo_request_wave(request_id, volunteers)
+
+        send_message_with_menu_button(
+            chat_id,
+            f"👁️ Отправляем запрос следующим волонтёрам...\n\n"
+            f"📤 Отправлено ещё {sent_count} волонтёрам.\n"
+            "⏳ Ожидайте новые описания..."
+        )
+    else:
+        send_message_with_menu_button(
+            chat_id,
+            "⚠️ К сожалению, больше нет доступных волонтёров.\n\n"
+            "Попробуйте создать новый запрос позже."
+        )
