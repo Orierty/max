@@ -2,6 +2,7 @@
 Max.ru Bot - Главный файл
 Бот для связи волонтёров с нуждающимися
 """
+
 import logging
 import time
 import sys
@@ -10,11 +11,11 @@ import os
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler('bot.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+        logging.FileHandler("bot.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ from bot.utils import get_updates, get_bot_info
 from database import init_db_pool, close_db_pool
 
 # Импорт обработчиков
-from bot.handlers.messages import handle_message
+from bot.handlers.messages import handle_message, handle_start
 from bot.handlers.callbacks import handle_callback
 
 # Импорт wave sender
@@ -42,7 +43,10 @@ from bot.wave_sender import start_wave_sender, stop_wave_sender
 # Импорт chat pool initializer
 from bot.chat_pool_initializer import sync_chat_pool
 
-logger.info(f"Vision Model: {'ENABLED' if VISION_MODEL_ENABLED else 'DISABLED (using stubs)'}")
+logger.info(
+    f"Vision Model: {'ENABLED' if VISION_MODEL_ENABLED else 'DISABLED (using stubs)'}"
+)
+
 
 def main():
     """Главная функция бота"""
@@ -59,7 +63,9 @@ def main():
     # Получаем информацию о боте
     bot_info = get_bot_info()
     if bot_info:
-        logger.info(f"Бот запущен: {bot_info.get('name')} (@{bot_info.get('username')})")
+        logger.info(
+            f"Бот запущен: {bot_info.get('name')} (@{bot_info.get('username')})"
+        )
     else:
         logger.error("Не удалось получить информацию о боте. Проверьте токен.")
         close_db_pool()
@@ -88,17 +94,24 @@ def main():
 
                     for update in updates:
                         try:
-                            update_type = update.get('update_type')
+                            update_type = update.get("update_type")
 
                             # Обрабатываем новые сообщения
-                            if update_type == 'message_created':
+                            if update_type == "message_created":
                                 handle_message(update)
                             # Обрабатываем callback'и (нажатия на кнопки)
-                            elif update_type == 'message_callback':
+                            elif update_type == "message_callback":
                                 handle_callback(update)
+                            elif update_type == "bot_started":
+                                chat_id = update["chat_id"]
+                                user_id = update["user"]["user_id"]
+                                username = update["user"]["first_name"]
+                                handle_start(chat_id, username, user_id)
 
                         except Exception as e:
-                            logger.error(f"Ошибка обработки обновления: {e}", exc_info=True)
+                            logger.error(
+                                f"Ошибка обработки обновления: {e}", exc_info=True
+                            )
 
                     # Обновляем marker
                     new_marker = data.get("marker")
@@ -116,10 +129,15 @@ def main():
 
             except Exception as e:
                 error_count += 1
-                logger.error(f"Неожиданная ошибка ({error_count}/{max_errors}): {e}", exc_info=True)
+                logger.error(
+                    f"Неожиданная ошибка ({error_count}/{max_errors}): {e}",
+                    exc_info=True,
+                )
 
                 if error_count >= max_errors:
-                    logger.error("Слишком много ошибок подряд. Перезапуск через 30 секунд...")
+                    logger.error(
+                        "Слишком много ошибок подряд. Перезапуск через 30 секунд..."
+                    )
                     time.sleep(30)
                     error_count = 0
                     marker = None
@@ -130,6 +148,7 @@ def main():
         stop_wave_sender()
         close_db_pool()
         logger.info("Бот остановлен")
+
 
 if __name__ == "__main__":
     try:

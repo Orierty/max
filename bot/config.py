@@ -1,6 +1,7 @@
 """
 Конфигурация бота
 """
+
 import os
 from dotenv import load_dotenv
 
@@ -24,14 +25,13 @@ DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME", "max_bot")
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+GIGACHAT_API_KEY = os.getenv("GIGACHAT_API_KEY", "")
 
 # Max.ru API
 BASE_URL = "https://platform-api.max.ru"
 MAX_API_URL = BASE_URL  # Алиас для совместимости
 # Max.ru использует access_token как query parameter, а не Authorization header
-HEADERS = {
-    "Content-Type": "application/json"
-}
+HEADERS = {"Content-Type": "application/json"}
 
 # Пути
 DOWNLOADS_DIR = "downloads"

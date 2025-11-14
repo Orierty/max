@@ -1,193 +1,191 @@
-"""
-Функции для работы с моделью распознавания изображений Qwen2-VL
-"""
 import os
 import logging
+from gigachat import GigaChat
 import requests
-
-from bot.config import VISION_MODEL_ENABLED, MODELS_DIR
+from PIL import Image
+import io
+from bot.config import VISION_MODEL_ENABLED, GIGACHAT_API_KEY
+from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
-# Глобальные переменные для модели
-vision_model = None
-vision_processor = None
+VISION_MODEL = "GigaChat-Pro"
+vision_client = None
 
-# Импортируем AI библиотеки только если нейронка включена
-if VISION_MODEL_ENABLED:
+
+# ---------- ИНИЦИАЛИЗАЦИЯ GIGACHAT ----------
+
+
+def convert_to_jpeg(image_path):
+    """Конвертирует изображение в RGB JPEG и возвращает BytesIO с именем файла."""
     try:
-        import torch
-        from PIL import Image
-        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
-        from qwen_vl_utils import process_vision_info
-        logger.info("AI библиотеки успешно загружены")
-    except ImportError as e:
-        logger.error(f"Ошибка импорта AI библиотек: {e}")
-        logger.error("Установите зависимости: pip install torch transformers pillow qwen-vl-utils")
-else:
-    logger.info("Vision Model отключена (VISION_MODEL_ENABLED=false), AI библиотеки не загружаются")
+        with Image.open(image_path) as img:
+            logger.info(f"Формат изображения: {img.format}, Режим: {img.mode}")
+
+            buffer = BytesIO()
+            img.convert("RGB").save(buffer, format="JPEG", quality=95)
+            buffer.name = "image.jpg"  # <- ВАЖНО! указываем имя файла
+            buffer.seek(0)
+            return buffer
+
+    except Exception as e:
+        logger.error(f"Ошибка конвертации изображения: {e}")
+        raise
+
 
 def init_vision_model():
-    """Инициализирует модель Qwen2-VL для распознавания изображений"""
-    global vision_model, vision_processor
+    """Инициализирует GigaChat клиент."""
+    global vision_client
+
+    if not VISION_MODEL_ENABLED:
+        logger.info("Vision отключён")
+        return False
+
+    if not GIGACHAT_API_KEY:
+        logger.error("GIGACHAT_API_KEY отсутствует")
+        return False
 
     try:
-        # Путь к папке с моделями в рабочей директории
-        models_dir = os.path.join(os.path.dirname(__file__), "..", "..", MODELS_DIR)
-        os.makedirs(models_dir, exist_ok=True)
-
-        # Пробуем использовать GPTQ модель, если установлен auto-gptq
-        try:
-            import auto_gptq
-            model_name = "Qwen/Qwen2-VL-2B-Instruct-GPTQ-Int4"
-            local_model_path = os.path.join(models_dir, "Qwen2-VL-2B-Instruct-GPTQ-Int4")
-            logger.info("Загрузка GPTQ модели Qwen2-VL-2B-Instruct-GPTQ-Int4...")
-        except ImportError:
-            # Если auto-gptq не установлен, используем обычную модель
-            model_name = "Qwen/Qwen2-VL-2B-Instruct"
-            local_model_path = os.path.join(models_dir, "Qwen2-VL-2B-Instruct")
-            logger.info("auto-gptq не установлен, используем стандартную модель Qwen2-VL-2B-Instruct...")
-            logger.warning("Для экономии памяти рекомендуется установить: pip install auto-gptq")
-
-        # Проверяем, есть ли уже локальная модель
-        if os.path.exists(local_model_path) and os.path.isdir(local_model_path):
-            logger.info(f"Используем локальную модель из {local_model_path}")
-            model_source = local_model_path
-        else:
-            logger.info(f"Модель будет скачана из HuggingFace и сохранена в {local_model_path}")
-            model_source = model_name
-
-        # Загружаем процессор
-        vision_processor = AutoProcessor.from_pretrained(
-            model_source,
-            trust_remote_code=True,
-            cache_dir=models_dir if model_source == model_name else None
+        vision_client = GigaChat(
+            credentials=GIGACHAT_API_KEY,
+            verify_ssl_certs=False,
+            model=VISION_MODEL,
+            scope="GIGACHAT_API_PERS",
         )
-
-        # Загружаем модель
-        # Используем float16 если доступна GPU, иначе float32 для CPU
-        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-
-        vision_model = Qwen2VLForConditionalGeneration.from_pretrained(
-            model_source,
-            torch_dtype=dtype,
-            device_map="auto",
-            trust_remote_code=True,
-            cache_dir=models_dir if model_source == model_name else None
-        )
-
-        # Сохраняем модель локально, если она была скачана из HuggingFace
-        if model_source == model_name:
-            logger.info(f"Сохраняем модель локально в {local_model_path}...")
-            vision_model.save_pretrained(local_model_path)
-            vision_processor.save_pretrained(local_model_path)
-            logger.info("Модель успешно сохранена локально")
-
-        device = next(vision_model.parameters()).device
-        logger.info(f"Модель Qwen2-VL успешно загружена на устройство: {device}")
+        logger.info("GigaChat Vision клиент инициализирован")
         return True
 
     except Exception as e:
-        logger.error(f"Ошибка при загрузке модели Qwen2-VL: {e}", exc_info=True)
+        logger.error(f"Ошибка инициализации: {e}")
         return False
 
-def describe_image(image_path):
-    """Описывает изображение на русском языке с помощью Qwen2-VL"""
-    global vision_model, vision_processor
 
-    # Если нейронка выключена, возвращаем заглушку
-    if not VISION_MODEL_ENABLED:
-        logger.info("Vision Model отключена, возвращаем заглушку")
-        return ("🔧 Режим заглушки (Vision Model отключена)\n\n"
-                "На изображении видно: [здесь было бы описание от нейронки]\n\n"
-                "Для включения нейронки установите VISION_MODEL_ENABLED=true в файле .env")
+# ---------- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ----------
 
-    # Если модель ещё не загружена, загружаем её
-    if vision_model is None or vision_processor is None:
-        logger.info("Модель не загружена, инициализируем...")
-        if not init_vision_model():
-            return "Ошибка: не удалось загрузить модель для распознавания изображений."
 
+def prepare_image_for_upload(image_path):
+    """Проверяет формат изображения и конвертирует в RGB JPEG, если нужно."""
     try:
-        # Открываем изображение
-        image = Image.open(image_path).convert('RGB')
+        with Image.open(image_path) as img:
+            logger.info(f"Формат изображения: {img.format}, Режим: {img.mode}")
 
-        # Формируем запрос на русском языке
+            # Если не JPEG или PNG или есть альфа-канал — конвертируем в RGB JPEG
+            if img.format not in ["JPEG", "PNG"] or img.mode != "RGB":
+                logger.info("Конвертация изображения в JPEG...")
+                buffer = io.BytesIO()
+                img.convert("RGB").save(buffer, format="JPEG", quality=95)
+                buffer.seek(0)
+                return buffer
+            else:
+                # Открываем обычным файлом
+                buffer = open(image_path, "rb")
+                return buffer
+
+    except Exception as e:
+        logger.error(f"Ошибка подготовки изображения: {e}")
+        raise
+
+
+# ---------- ОСНОВНАЯ ФУНКЦИЯ ----------
+
+
+def describe_image(image_path: str) -> str:
+    """
+    Описывает изображение через GigaChat Vision.
+    Автоматически конвертирует неподдерживаемый формат в JPEG.
+    """
+    global vision_client
+
+    headers = {"Authorization": f"Bearer {GIGACHAT_API_KEY}"}
+    url = "https://gigachat.devices.sberbank.ru/api/v1/models"
+
+    response = requests.get(url, headers=headers, verify=False)
+    if response.status_code == 200:
+        models = response.json()
+        for m in models:
+            print(m)
+    else:
+        print("Ошибка запроса моделей:", response.status_code, response.text)
+
+    if not VISION_MODEL_ENABLED:
+        return "Vision отключён"
+
+    if vision_client is None:
+        if not init_vision_model():
+            return "Ошибка инициализации GigaChat"
+
+    if not os.path.exists(image_path):
+        return f"Файл не найден: {image_path}"
+
+    file_id = None
+    image_file = None
+    try:
+        # Подготовка изображения
+        logger.info("Подготовка изображения для загрузки...")
+        # image_file = prepare_image_for_upload(image_path)
+        jpeg_buffer = convert_to_jpeg(image_path)
+
+        # Загружаем файл в GigaChat
+        uploaded_file = vision_client.upload_file(jpeg_buffer)
+        file_id = uploaded_file.id_
+        logger.info(f"Файл загружен (ID={file_id})")
+
+        # Формируем сообщение
         messages = [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "image": image_path,
-                    },
-                    {
-                        "type": "text",
-                        "text": "Опиши подробно что изображено на этой фотографии на русском языке. Будь максимально детальным и точным в описании."
-                    },
-                ],
+                "content": "Опиши подробно, что изображено на фотографии. "
+                "Укажи объекты, людей, действия, фон, цвета, эмоции, детали. "
+                "Ответ дай на русском языке.",
+                "attachments": [file_id],
             }
         ]
 
-        # Подготавливаем текст
-        text = vision_processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-
-        # Обрабатываем изображение
-        image_inputs, video_inputs = process_vision_info(messages)
-
-        # Подготавливаем входные данные
-        inputs = vision_processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
-            return_tensors="pt",
-        )
-
-        device = next(vision_model.parameters()).device
-        inputs = inputs.to(device)
-
-        # Генерируем описание
-        logger.info("Генерация описания изображения...")
-        with torch.no_grad():
-            generated_ids = vision_model.generate(
-                **inputs,
-                max_new_tokens=512,
-                temperature=0.7,
-                do_sample=True
-            )
-
-        # Декодируем результат
-        generated_ids_trimmed = [
-            out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-        ]
-        output_text = vision_processor.batch_decode(
-            generated_ids_trimmed,
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False
-        )[0]
-
-        logger.info("Описание изображения успешно сгенерировано")
-        return output_text
+        # Отправляем запрос
+        logger.info("Отправка запроса к Vision...")
+        response = vision_client.chat({"messages": messages, "temperature": 0.1})
+        text = response.choices[0].message.content
+        return text
 
     except Exception as e:
-        logger.error(f"Ошибка при обработке изображения: {e}", exc_info=True)
-        return f"Ошибка при обработке изображения: {str(e)}"
+        logger.error(f"Ошибка Vision: {e}")
+        return f"Ошибка обработки изображения: {e}"
+
+    finally:
+        # Закрываем файл, если он был открыт
+        if image_file and hasattr(image_file, "close"):
+            image_file.close()
+
+        # Удаляем файл с сервера
+        if file_id:
+            try:
+                vision_client.delete_file(file_id)
+                logger.info(f"Файл {file_id} удалён с сервера GigaChat")
+            except Exception as e:
+                logger.warning(f"Не удалось удалить файл с сервера: {e}")
+
+
+# ---------- ФУНКЦИЯ СКАЧИВАНИЯ ----------
+
 
 def download_image(url, save_path):
-    """Скачивает изображение по URL"""
+    """Скачивает изображение по URL."""
     try:
-        response = requests.get(url, timeout=30)
-        if response.status_code == 200:
-            with open(save_path, 'wb') as f:
-                f.write(response.content)
-            logger.info(f"Изображение сохранено: {save_path}")
-            return True
-        else:
-            logger.error(f"Ошибка скачивания изображения: {response.status_code}")
+        response = requests.get(url, timeout=30, verify=False)
+        if response.status_code != 200:
+            logger.error(f"Ошибка скачивания: {response.status_code}")
             return False
+
+        if not response.headers.get("content-type", "").startswith("image/"):
+            logger.error("URL не ведет к изображению")
+            return False
+
+        with open(save_path, "wb") as f:
+            f.write(response.content)
+
+        logger.info(f"Изображение сохранено: {save_path}")
+        return True
+
     except Exception as e:
-        logger.error(f"Ошибка при скачивании изображения: {e}")
+        logger.error(f"Ошибка скачивания: {e}")
         return False
