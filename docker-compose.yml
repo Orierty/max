@@ -2,14 +2,23 @@ version: '3.8'
 
 services:
   postgres:
-    build: ./db
+    image: postgres:15
     container_name: max_bot_db
     env_file:
-      - .env
+      - .env.docker
     ports:
       - '${DB_PORT}:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  bot:
+    build: .
+    container_name: max_bot
+    env_file:
+      - .env.docker
+    depends_on:
+      - postgres
     restart: always
 
 volumes:

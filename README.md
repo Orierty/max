@@ -245,7 +245,7 @@ sudo usermod -aG docker $USER
 #### Запуск PostgreSQL
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 Проверка статуса:

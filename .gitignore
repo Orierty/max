@@ -10,6 +10,7 @@ SECURITY_SYSTEM.md
 
 # Переменные окружения
 .env
+.env.docker
 
 # Логи
 *.log

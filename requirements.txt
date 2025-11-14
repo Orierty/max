@@ -2,6 +2,9 @@
 requests
 python-dotenv
 psycopg2-binary
+gigachat
+Pillow
+
 
 # AI библиотеки (раскомментируй если нужны)
 
