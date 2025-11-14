@@ -1,16 +1,28 @@
 """
 Обработчики callback запросов
 """
+
 import logging
 from database import get_user
 from bot.utils import answer_callback, send_message
 from bot.utils.debounce import is_action_allowed
-from .menu import handle_role_selection, show_needy_menu, show_volunteer_menu, show_moderator_menu
+from .menu import (
+    handle_role_selection,
+    show_needy_menu,
+    show_volunteer_menu,
+    show_moderator_menu,
+)
 from .requests import (
-    handle_request_call, handle_accept_request, handle_complete_request,
-    handle_add_tag, handle_skip_tags, handle_rate_volunteer, handle_complaint
+    handle_request_call,
+    handle_accept_request,
+    handle_complete_request,
+    handle_add_tag,
+    handle_skip_tags,
+    handle_rate_volunteer,
+    handle_complaint,
 )
 from .image import handle_image_to_text_request
+
 # from .sos import handle_sos  # Закомментировано
 from .voice import handle_voice_to_text_request
 from .verification import (
@@ -19,7 +31,7 @@ from .verification import (
     show_photo_requests_for_volunteer,
     handle_take_photo_request,
     handle_photo_helpful,
-    handle_photo_not_helpful
+    handle_photo_not_helpful,
 )
 from .moderator import (
     show_verification_requests,
@@ -29,28 +41,29 @@ from .moderator import (
     show_complaints,
     show_complaint_details,
     block_volunteer,
-    dismiss_complaint
+    dismiss_complaint,
 )
 from .volunteer import show_volunteer_stats, show_active_requests_list
 
 logger = logging.getLogger(__name__)
 
+
 def handle_callback(update):
     """Обработка callback query"""
-    callback = update.get('callback', {})
-    message = update.get('message', {})
+    callback = update.get("callback", {})
+    message = update.get("message", {})
 
-    callback_id = callback.get('callback_id')
-    payload = callback.get('payload')
-    user_info = callback.get('user', {})
+    callback_id = callback.get("callback_id")
+    payload = callback.get("payload")
+    user_info = callback.get("user", {})
 
-    recipient = message.get('recipient', {})
-    chat_id = recipient.get('chat_id')
-    chat_type = recipient.get('chat_type')
-    message_id = message.get('body', {}).get('mid')
+    recipient = message.get("recipient", {})
+    chat_id = recipient.get("chat_id")
+    chat_type = recipient.get("chat_type")
+    message_id = message.get("body", {}).get("mid")
     # Пробуем получить username или name
-    username = user_info.get('username') or user_info.get('name')
-    user_id = user_info.get('user_id')
+    username = user_info.get("username") or user_info.get("name")
+    user_id = user_info.get("user_id")
 
     if not callback_id or not payload or not chat_id:
         return
@@ -65,14 +78,26 @@ def handle_callback(update):
 
     # Проверяем debounce для критичных действий
     critical_actions = [
-        "request_call", "image_to_text", "voice_to_text",  # "sos" закомментировано
-        "request_verification", "request_photo_description"
+        "request_call",
+        "image_to_text",
+        "voice_to_text",  # "sos" закомментировано
+        "request_verification",
+        "request_photo_description",
     ]
 
     # Также проверяем действия, начинающиеся с определённых префиксов
-    critical_prefixes = ["accept_request_", "complete_request_", "cancel_request_", "take_photo_", "photo_helpful_", "photo_not_helpful_"]
+    critical_prefixes = [
+        "accept_request_",
+        "complete_request_",
+        "cancel_request_",
+        "take_photo_",
+        "photo_helpful_",
+        "photo_not_helpful_",
+    ]
 
-    is_critical = payload in critical_actions or any(payload.startswith(prefix) for prefix in critical_prefixes)
+    is_critical = payload in critical_actions or any(
+        payload.startswith(prefix) for prefix in critical_prefixes
+    )
 
     if is_critical and not is_action_allowed(chat_id, payload):
         answer_callback(callback_id, "⏳ Подождите немного перед повторным действием")
@@ -139,6 +164,7 @@ def handle_callback(update):
     elif payload.startswith("cancel_request_"):
         request_id = int(payload.replace("cancel_request_", ""))
         from .requests import handle_cancel_request
+
         handle_cancel_request(chat_id, request_id)
         answer_callback(callback_id)
 
