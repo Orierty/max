@@ -466,11 +466,6 @@ psql -U postgres max_bot < backup_20251114.sql
 
 ### Частые ошибки
 
-**ModuleNotFoundError: No module named 'psycopg2'**
-```bash
-pip install psycopg2-binary
-```
-
 **connection to server failed**
 - Проверьте, запущен ли PostgreSQL: `docker compose ps`
 - Проверьте данные в `.env`
