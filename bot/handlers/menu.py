@@ -24,17 +24,17 @@ def show_role_selection(chat_id):
 def show_needy_menu(chat_id):
     """Показывает главное меню для нуждающегося"""
     # Изменяем текст кнопки в зависимости от статуса нейронки
-    image_button_text = "📷 Изображение → Текст"
+    image_button_text = "Автоматическое описание фото"
     if not VISION_MODEL_ENABLED:
         image_button_text += " (заглушка)"
 
     # Inline кнопки (появляются под сообщением)
     inline_buttons = [
-        [{"type": "callback", "text": "📞 Запросить звонок волонтёра", "payload": "request_call"}],
-        [{"type": "callback", "text": "🎤 Голосовое → Текст", "payload": "voice_to_text"}],
-        [{"type": "callback", "text": "🔊 Текст → Голосовое (скоро)", "payload": "text_to_voice"}],
+        [{"type": "callback", "text": "Запросить звонок волонтёра", "payload": "request_call"}],
+        [{"type": "callback", "text": "Голосовое в Текст", "payload": "voice_to_text"}],
+        # [{"type": "callback", "text": "Текст → Голосовое (скоро)", "payload": "text_to_voice"}],
         [{"type": "callback", "text": image_button_text, "payload": "image_to_text"}],
-        [{"type": "callback", "text": "👁️ Вызвать волонтера для описания фото", "payload": "request_photo_description"}],
+        [{"type": "callback", "text": "Описание фото волонтером", "payload": "request_photo_description"}],
         # [{"type": "callback", "text": "🆘 SOS", "payload": "sos"}]  # Закомментировано
     ]
 
